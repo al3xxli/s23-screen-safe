@@ -35,6 +35,7 @@ public class MotionEvent {
  public static MotionEvent obtain(MotionEvent e){return obtain(e.down,e.time,e.action,e.props.length,e.props,e.coords,0,0,1,1,0,0,4098,0);}
  public int getActionMasked(){return action&255;}public int getActionIndex(){return action>>8;}public void setAction(int a){action=a;}
  public int getPointerCount(){return props.length;}public int getPointerId(int i){return props[i].id;}public float getY(int i){return coords[i].y;}
+ public float getX(int i){return coords[i].x;}public float getHistoricalX(int i,int h){throw new AssertionError();}
  public int getHistorySize(){return 0;}public float getHistoricalY(int i,int h){throw new AssertionError();}
  public long getEventTime(){return time;}public long getDownTime(){return down;}
  public void getPointerProperties(int i,PointerProperties p){p.id=props[i].id;p.toolType=props[i].toolType;}
@@ -58,6 +59,21 @@ public class HostChecks {
   f.disable();f.enable(SessionRunner.current.automation);Handler.drain();
   f.onMotionEvent(down());Handler.drain();TouchFilterChecks.actions(0,3,0,3,0);
   System.out.println("PASS: queued pre-lock events discarded, service reconnect, disable/enable ordering.");
+  f.setRotation(1);f.setRotation(0);Handler.drain();
+  TouchFilterChecks.require(f.area.rotation==0,"Quick return to portrait lost while landscape was queued");
+  f.setRotation(1);f.setRotation(3);Handler.drain();
+  TouchFilterChecks.require(f.area.rotation==3,"Latest rotation did not win");
+  f.setRotation(0);Handler.drain();
+  System.out.println("PASS: rapid rotation reversals keep the touch filter aligned.");
+  for(int r=0;r<4;r++){
+   ca.screensafe.core.SafeArea a=new ca.screensafe.core.SafeArea(r);
+   TouchFilterChecks.require(a.width()*a.height()==1440*2161,"Area changed with rotation");
+   TouchFilterChecks.require(a.maskWidth()*a.maskHeight()==1440*927,"Mask area changed");
+   TouchFilterChecks.require(a.contains(a.left,a.top),"Usable boundary rejected");
+   TouchFilterChecks.require(!a.contains(a.maskLeft()+1,a.maskTop()+1),"Damaged edge accepted");
+   TouchFilterChecks.require(!a.contains(a.right,a.bottom),"Outside display accepted");
+  }
+  System.out.println("PASS: all four rotations preserve usable area and physical mask.");
  }
 }'''
 }
@@ -72,6 +88,7 @@ def run():
         target.write_text(source, encoding='utf-8')
     sources = list(base.rglob('*.java'))
     sources += [root / 'source/app/TouchFilterService.java', root / 'source/app/TouchFilterChecks.java']
+    sources += list((root / 'source/shared').glob('*.java'))
     classes = base / 'classes'
     classes.mkdir(exist_ok=True)
     subprocess.run([str(Path(args.jdk) / 'bin/javac.exe'), '-encoding', 'UTF-8', '-d', str(classes), *map(str, sources)], check=True)

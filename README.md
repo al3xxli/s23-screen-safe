@@ -1,3 +1,12 @@
+# Experimental adaptive rotation — not a release
+
+This branch contains an unfinished five-minute trial. The user reported that the wallpaper gap and rotation flash persisted in previous trials. The latest candidate builds and passes host checks but has not been installed or visually verified. See [EXPERIMENT.md](EXPERIMENT.md) for the observed failure, prepared corrections, and next test.
+
+Keep USB connected during testing. `Start Screen Safe.cmd` on this branch starts a five-minute trial; `Restore Screen.cmd` restores full-screen geometry. Controller/forwarding connection loss remains unresolved. Do not rely on this candidate for daily use.
+
+`main` still holds the previous 0.5 implementation. The historical instructions below describe that version, not the adaptive candidate.
+
+---
 # Screen Safe 0.5 — S23 Ultra prototype
 
 Screen Safe keeps the interface in the bottom 70% of your SM-S918W's screen at full width. Version 0.5 adds interrupted-gesture recovery to early touch filtering to the separate top-30% blocker. **Root is not required.** This portrait-only prototype is for the tested One UI 8.5 / Android 16 phone at 1440 × 3088 resolution.

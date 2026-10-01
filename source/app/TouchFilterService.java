@@ -14,6 +14,7 @@ import android.view.MotionEvent;
 import android.view.accessibility.AccessibilityEvent;
 import java.util.ArrayList;
 import java.util.HashSet;
+import ca.screensafe.core.SafeArea;
 
 /** Consumes physical touchscreen events before window and gesture-monitor dispatch. */
 public final class TouchFilterService extends AccessibilityService {
@@ -27,7 +28,8 @@ public final class TouchFilterService extends AccessibilityService {
     private final HashSet<Integer> rejected=new HashSet<>();
     private long downTime;
     private MotionEvent last;
-    private static final int TOP=927;
+    volatile SafeArea area=new SafeArea(0);
+    private int requestedRotation;
     private volatile int generation;
     public volatile long recoveries;
     private boolean receiving;
@@ -79,6 +81,16 @@ public final class TouchFilterService extends AccessibilityService {
         generation++;
         worker.post(new Runnable(){public void run(){clearStream();}});
     }
+    public void setRotation(int rotation){
+        rotation&=3;
+        // Compare the requested rotation, not the worker's last completed update.
+        // A quick turn back must not be lost while the first update is queued.
+        if(requestedRotation==rotation)return;
+        requestedRotation=rotation;
+        generation++;
+        final SafeArea next=new SafeArea(rotation);
+        worker.post(new Runnable(){public void run(){clearStream();area=next;}});
+    }
     // Cleanup must succeed even when injection is unavailable (for example while locked).
     void clearStream(){
         try{cancel();}catch(RuntimeException error){
@@ -100,8 +112,8 @@ public final class TouchFilterService extends AccessibilityService {
         }});
     }
     private boolean unsafe(MotionEvent e,int i){
-        if(e.getY(i)<TOP)return true;
-        for(int h=0;h<e.getHistorySize();h++)if(e.getHistoricalY(i,h)<TOP)return true;
+        if(!area.contains(e.getX(i),e.getY(i)))return true;
+        for(int h=0;h<e.getHistorySize();h++)if(!area.contains(e.getHistoricalX(i,h),e.getHistoricalY(i,h)))return true;
         return false;
     }
     void filter(MotionEvent e){

@@ -9,7 +9,14 @@ $ErrorActionPreference='Stop'
 $taskOutput=Split-Path $PSScriptRoot -Parent
 foreach($taskName in @('app-classes','app-dex','backend-classes','backend-dex')) { New-Item -ItemType Directory -Force (Join-Path $BuildDirectory $taskName) | Out-Null }
 foreach($taskName in @('app','backend')) {
-    $taskSources=Get-ChildItem (Join-Path $PSScriptRoot $taskName) -Filter *.java | Select-Object -ExpandProperty FullName
+    # Removed/renumbered anonymous classes must not survive into the next APK/DEX.
+    $taskClassRoot=[IO.Path]::GetFullPath((Join-Path $BuildDirectory "$taskName-classes"))
+    foreach($taskOldClass in @(Get-ChildItem -LiteralPath $taskClassRoot -Filter *.class -File -Recurse)){
+        if(-not $taskOldClass.FullName.StartsWith($taskClassRoot+[IO.Path]::DirectorySeparatorChar,[StringComparison]::OrdinalIgnoreCase)){throw 'Class cleanup escaped its build folder'}
+        Remove-Item -LiteralPath $taskOldClass.FullName
+    }
+    $taskSources=@(Get-ChildItem (Join-Path $PSScriptRoot $taskName) -Filter *.java | Select-Object -ExpandProperty FullName)
+    $taskSources+=Get-ChildItem (Join-Path $PSScriptRoot 'shared') -Filter *.java | Select-Object -ExpandProperty FullName
     & "$Jdk\bin\javac.exe" -encoding UTF-8 --release 8 -classpath $AndroidJar -d "$BuildDirectory\$taskName-classes" $taskSources
     if($LASTEXITCODE -ne 0){throw "$taskName compilation failed"}
     $taskClasses=Get-ChildItem "$BuildDirectory\$taskName-classes" -Filter *.class -Recurse | Select-Object -ExpandProperty FullName

@@ -31,7 +31,7 @@ public class MainActivity extends Activity {
         enable=new Button(this);enable.setText("Protect top 30%");content.addView(enable);
         restore=new Button(this);restore.setText("Restore full screen");content.addView(restore);
         end=new Button(this);end.setText("End activated session");content.addView(end);
-        TextView note=label("S23 Ultra prototype · Portrait only\n\nTouches beginning in the top strip stay blocked until lifted. A gesture entering the strip is cancelled.\n\nYou can disconnect USB after activation. Reconnect after a phone restart.\n\nIf restoration fails, the top blocker stays active. Your screen density and Tap duration setting are preserved.",14);
+        TextView note=label("S23 Ultra · Experimental rotation trial\n\nKeep USB connected during this five-minute test. The wallpaper and rotation fixes still need verification.\n\nIf touch forwarding or restoration stops working, run Restore Screen on your computer.",14);
         note.setPadding(0,dp(25),0,0);content.addView(note);setContentView(scroll);
         enable.setOnClickListener(new View.OnClickListener(){public void onClick(View v){if(SessionRunner.current!=null)SessionRunner.current.request("START");}});
         restore.setOnClickListener(new View.OnClickListener(){public void onClick(View v){if(SessionRunner.current!=null)SessionRunner.current.request("STOP");}});

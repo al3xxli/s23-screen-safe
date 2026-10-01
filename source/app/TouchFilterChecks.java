@@ -22,6 +22,12 @@ final class TouchFilterChecks {
         try{f.filter(e);}finally{e.recycle();}
     }
     static void require(boolean okay,String message){if(!okay)throw new AssertionError(message);}
+    static void point(TouchFilterService f,int action,float x,float y){
+        MotionEvent.PointerProperties p=new MotionEvent.PointerProperties();p.id=0;p.toolType=MotionEvent.TOOL_TYPE_FINGER;
+        MotionEvent.PointerCoords c=new MotionEvent.PointerCoords();c.x=x;c.y=y;c.pressure=1;
+        MotionEvent e=MotionEvent.obtain(1000,time+=10,action,1,new MotionEvent.PointerProperties[]{p},new MotionEvent.PointerCoords[]{c},0,0,1,1,6,0,InputDevice.SOURCE_TOUCHSCREEN,0);
+        try{f.filter(e);}finally{e.recycle();}
+    }
     static void actions(int... expected){require(sent.size()==expected.length,"Event count "+sent.size()+" expected "+expected.length);
         for(int i=0;i<expected.length;i++)require(sent.get(i).getActionMasked()==expected[i],"Unexpected action at "+i);}
     static String run(){
@@ -58,6 +64,14 @@ final class TouchFilterChecks {
         f.clearStream();require(f.failures==1,"Cancellation failure was not recorded");
         f.testSink=new TouchFilterService.EventSink(){public void send(MotionEvent e){sent.add(MotionEvent.obtain(e));}};
         event(f,0,new int[]{0},1600);event(f,1,new int[]{0},1600);actions(0,0,1);
-        fresh();return "PASS: original filtering checks plus lost pointer UP, reused pointer ID, interrupted stream, and failed cancellation recovery.";
+        for(int rotation=0;rotation<4;rotation++){
+            f=fresh();f.area=new ca.screensafe.core.SafeArea(rotation);
+            float goodX=(f.area.left+f.area.right)/2f,goodY=(f.area.top+f.area.bottom)/2f;
+            float badX=f.area.maskLeft()+1,badY=f.area.maskTop()+1;
+            point(f,0,badX,badY);point(f,2,goodX,goodY);point(f,1,goodX,goodY);actions();
+            point(f,0,goodX,goodY);point(f,1,goodX,goodY);actions(0,1);
+            point(f,0,goodX,goodY);point(f,2,badX,badY);point(f,1,goodX,goodY);actions(0,1,0,3);
+        }
+        fresh();return "PASS: filtering, lost pointer UP, reused IDs, interruption recovery, failed cancellation, and mask filtering in all four rotations.";
     }
 }

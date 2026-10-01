@@ -1,3 +1,10 @@
+# Experimental candidate status — October 1, 2026
+
+NOT RELEASE-VERIFIED. Read [EXPERIMENT.md](EXPERIMENT.md) for the latest evidence. Host checks and APK build/signature verification passed. The final candidate has not had on-device checks, and the previous trials failed the wallpaper/rotation visual checks. The instrumentation connection also died during a trial. Full-screen recovery succeeded afterward.
+
+The verification notes below are historical results from version 0.5 and earlier; they do not validate this experimental candidate.
+
+---
 # Version 0.5 verification — October 1, 2026
 
 - Production app and backend compiled against Android API 36; APK signature verified.

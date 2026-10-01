@@ -10,6 +10,7 @@ import android.os.*;
 import android.view.*;
 import java.io.*;
 import java.util.concurrent.*;
+import ca.screensafe.core.SafeArea;
 
 /** ADB-activated prototype session. No accessibility services are disabled. */
 public class SessionRunner extends Instrumentation {
@@ -23,6 +24,20 @@ public class SessionRunner extends Instrumentation {
     CountDownLatch backendFinished;
     volatile boolean restored; volatile String backendError;
     String testMode; boolean autoStart;
+    DisplayManager displayManager;
+    final DisplayManager.DisplayListener displayListener=new DisplayManager.DisplayListener(){
+        public void onDisplayAdded(int id){}
+        public void onDisplayRemoved(int id){}
+        public void onDisplayChanged(int id){if(id==0&&guard!=null)updateGuard();}
+    };
+    void updateGuard(){
+        SafeArea area=new SafeArea(displayManager.getDisplay(0).getRotation());
+        WindowManager.LayoutParams p=(WindowManager.LayoutParams)guard.getLayoutParams();
+        p.width=area.maskWidth();p.height=area.maskHeight();p.x=area.maskLeft();p.y=area.maskTop();
+        if(guardRotation!=area.rotation){manager.updateViewLayout(guard,p);guardRotation=area.rotation;}
+        if(TouchFilterService.current!=null)TouchFilterService.current.setRotation(area.rotation);
+    }
+    int guardRotation=-1;
     public void onCreate(Bundle args){testMode=args==null?null:args.getString("test");autoStart=args!=null&&"true".equals(args.getString("protect"));start();}
     public void request(String command){commands.offer(command);}
     void mainAction(final Runnable action) throws Exception {
@@ -44,7 +59,7 @@ public class SessionRunner extends Instrumentation {
             getTargetContext().startActivity(new Intent(getTargetContext(),MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
             if(testMode!=null){
                 new Handler(Looper.getMainLooper()).postDelayed(new Runnable(){public void run(){request("START");}},2000);
-                long stopAt="filter".equals(testMode)?92000:12000;
+                long stopAt="adaptive".equals(testMode)?300000:("filter".equals(testMode)?92000:12000);
                 new Handler(Looper.getMainLooper()).postDelayed(new Runnable(){public void run(){request("disconnect".equals(testMode)?"DISCONNECT":"STOP");}},stopAt);
                 new Handler(Looper.getMainLooper()).postDelayed(new Runnable(){public void run(){request("EXIT");}},stopAt+8000);
             }
@@ -80,8 +95,8 @@ public class SessionRunner extends Instrumentation {
                 String line;
                 while((line=reader.readLine())!=null){
                     if(line.equals("APPLIED")){
-                        try{mainAction(new Runnable(){public void run(){TouchFilterService.current.enable(automation);}});
-                            status="Protected\nTop 30% filtered before gestures";
+                        try{mainAction(new Runnable(){public void run(){TouchFilterService.current.enable(automation);updateGuard();}});
+                            status="Experimental layout active\nFive-minute rotation trial";
                         }catch(Exception e){backendError="Touch filter could not start";stopBackend();}
                     }
                     else if(line.equals("RESTORED"))restored=true;
@@ -116,12 +131,13 @@ public class SessionRunner extends Instrumentation {
         }
         if(busy&&!restored){
             // A failed recovery can leave the layout shifted. Keep its protection in place.
-            status="Top strip still protected\nRestore failed; tap Restore to retry or reconnect your computer.";
+            status="Layout not restored\nTouch filtering may be unavailable. Reconnect your computer and run Restore Screen.";
             android.util.Log.e("ScreenSafe","Recovery unconfirmed; retaining guard and filter");
             return;
         }
         mainAction(new Runnable(){public void run(){
             if(TouchFilterService.current!=null)TouchFilterService.current.disable();
+            if(displayManager!=null)displayManager.unregisterDisplayListener(displayListener);
             if(guard!=null&&guard.isAttachedToWindow())manager.removeViewImmediate(guard);guard=null;
         }});
         if(busy)status=backendError!=null?"Stopped\n"+backendError:(restored?"Full screen restored\nReady when you are":"Stopped. Check the screen is restored.");
@@ -129,12 +145,15 @@ public class SessionRunner extends Instrumentation {
     }
     void addGuard(){
         Context context=getTargetContext();
+        displayManager=context.getSystemService(DisplayManager.class);
         context=context.createDisplayContext(context.getSystemService(DisplayManager.class).getDisplay(0)).createWindowContext(2024,null);
         manager=context.getSystemService(WindowManager.class);
+        guardRotation=-1;
         guard=new View(context){public boolean onTouchEvent(MotionEvent event){return true;}};
         guard.setBackgroundColor(Color.BLACK);
         WindowManager.LayoutParams p=new WindowManager.LayoutParams(1440,927,2024,WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE|WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN|WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS|WindowManager.LayoutParams.FLAG_SPLIT_TOUCH,PixelFormat.OPAQUE);
         p.gravity=Gravity.TOP|Gravity.LEFT;p.setTitle("Screen Safe touch guard");p.packageName=getTargetContext().getPackageName();
         p.layoutInDisplayCutoutMode=WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS;p.setFitInsetsTypes(0);manager.addView(guard,p);
+        displayManager.registerDisplayListener(displayListener,new Handler(Looper.getMainLooper()));updateGuard();
     }
 }
