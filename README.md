@@ -1,6 +1,6 @@
 # Experimental adaptive rotation — not a release
 
-This branch contains an unfinished five-minute trial. The user reported that the wallpaper gap and rotation flash persisted in previous trials. The latest candidate builds and passes host checks but has not been installed or visually verified. See [EXPERIMENT.md](EXPERIMENT.md) for the observed failure, prepared corrections, and next test.
+This branch contains an unfinished five-minute trial. The user reported that the wallpaper gap and rotation flash persisted in previous trials. The latest retry has been installed: captures show the wallpaper gap removed and Camera controls fitting in portrait. Physical rotation and touch checks remain pending. See [EXPERIMENT.md](EXPERIMENT.md) for the observed failure, prepared corrections, and next test.
 
 Keep USB connected during testing. `Start Screen Safe.cmd` on this branch starts a five-minute trial; `Restore Screen.cmd` restores full-screen geometry. Controller/forwarding connection loss remains unresolved. Do not rely on this candidate for daily use.
 

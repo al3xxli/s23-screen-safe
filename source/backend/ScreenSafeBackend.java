@@ -13,7 +13,7 @@ public final class ScreenSafeBackend {
     static Class<?> organizerType, wctType, surfaceType, surfaceTxType, rectType, tokenType;
     static Object organizer;
     static final List<Object> surfaces = new ArrayList<>(), tokens = new ArrayList<>();
-    static Object wallpaperToken;
+    static Object wallpaperToken,wallpaperSurface;
     static boolean registered, restored, rotationChanged;
     static String originalRotation;
     static volatile boolean stop;
@@ -26,6 +26,11 @@ public final class ScreenSafeBackend {
     static long layoutStarted;
     static void position(Object st,SafeArea area)throws Exception{
         for(Object s:surfaces){
+            if(s==wallpaperSurface){
+                call(st,"setPosition",new Class<?>[]{surfaceType,float.class,float.class},s,0f,0f);
+                call(st,"setWindowCrop",new Class<?>[]{surfaceType,int.class,int.class},s,0,0);
+                continue;
+            }
             call(st,"setPosition",new Class<?>[]{surfaceType,float.class,float.class},s,(float)area.left,(float)area.top);
             call(st,"setWindowCrop",new Class<?>[]{surfaceType,int.class,int.class},s,area.width(),area.height());
         }
@@ -47,11 +52,15 @@ public final class ScreenSafeBackend {
         Object tx=wctType.getConstructor().newInstance();
         for(int i=0;i<tokens.size();i++){
             Object token=tokens.get(i);
-            // Keep Samsung's wallpaper in the native display coordinate space.
-            // Reducing its app bounds also applies a wallpaper offset, shifting
-            // the photograph up and leaving the bottom of the safe area empty.
-            // The surface crop still keeps it inside the same protected viewport.
-            if(token==wallpaperToken)continue;
+            // The wallpaper-only child retains native dimensions. Its shared
+            // OneHanded parent still resizes apps and clips everything to the mask.
+            if(token==wallpaperToken){
+                Object nativeBounds=rectType.getConstructor(int.class,int.class,int.class,int.class).newInstance(0,0,area.displayWidth,area.displayHeight);
+                call(tx,"setBounds",new Class<?>[]{tokenType,rectType},token,nativeBounds);
+                call(tx,"setAppBounds",new Class<?>[]{tokenType,rectType},token,nativeBounds);
+                call(tx,"setScreenSizeDp",new Class<?>[]{tokenType,int.class,int.class},token,area.displayWidth*160/density,area.displayHeight*160/density);
+                continue;
+            }
             call(tx,"setBounds",new Class<?>[]{tokenType,rectType},token,bounds);
             call(tx,"setAppBounds",new Class<?>[]{tokenType,rectType},token,bounds);
             call(tx,"setScreenSizeDp",new Class<?>[]{tokenType,int.class,int.class},token,area.width()*160/density,area.height()*160/density);
@@ -130,7 +139,13 @@ public final class ScreenSafeBackend {
             if(!command("wm","size").equals("Physical size: 1440x3088")) throw new IllegalStateException("Restore the phone's normal 1440x3088 resolution before enabling.");
             String display=command("dumpsys","window","displays");
             if(java.util.regex.Pattern.compile("OneHanded:.*\\(organized\\)").matcher(display).find()) throw new IllegalStateException("Another feature already controls this display area.");
+            if(java.util.regex.Pattern.compile("RemoteWallpaperAnim:.*\\(organized\\)").matcher(display).find())throw new IllegalStateException("Another feature controls the wallpaper area.");
             String containers=command("dumpsys","activity","containers");
+            for(String line:containers.split("\n"))if(line.contains("RemoteWallpaperAnim:")){
+                boolean empty=line.contains("requested-bounds=[0,0][0,0]");
+                boolean ours=line.contains("requested-bounds=[0,0][1440,3088]")||line.contains("requested-bounds=[0,0][3088,1440]");
+                if(!empty&&!(recovering&&stateFile.exists()&&ours))throw new IllegalStateException("Unexpected wallpaper display-area bounds.");
+            }
             int count=0;
             for(String line:containers.split("\n")) if(line.contains("OneHanded:")) {
                 count++;
@@ -171,12 +186,18 @@ public final class ScreenSafeBackend {
                 Object token=info.getClass().getField("token").get(info);
                 Object leash=call(area,"getLeash",new Class<?>[]{});
                 tokens.add(token);surfaces.add(leash);
-                if(leash.toString().contains("OneHanded:0:14")){
-                    if(wallpaperToken!=null)throw new IllegalStateException("Ambiguous wallpaper display area.");
-                    wallpaperToken=token;
-                }
             }
             if(tokens.size()!=8) throw new IllegalStateException("Unexpected number of display areas.");
+            List<?> wallpaperAreas=(List<?>)call(organizer,"registerOrganizer",new Class<?>[]{int.class},10002);
+            for(Object area:wallpaperAreas){
+                Object info=call(area,"getDisplayAreaInfo",new Class<?>[]{});
+                if(info.getClass().getField("displayId").getInt(info)!=0)continue;
+                Object token=info.getClass().getField("token").get(info);
+                Object leash=call(area,"getLeash",new Class<?>[]{});
+                tokens.add(token);surfaces.add(leash);
+                if(wallpaperToken!=null||!leash.toString().contains("RemoteWallpaperAnim:1:1"))throw new IllegalStateException("Unrecognized Samsung wallpaper area.");
+                wallpaperToken=token;wallpaperSurface=leash;
+            }
             if(recovering){restore();System.exit(0);return;}
             if(wallpaperToken==null)throw new IllegalStateException("Unrecognized Samsung wallpaper area.");
             displayManager=Class.forName("android.hardware.display.DisplayManagerGlobal").getMethod("getInstance").invoke(null);

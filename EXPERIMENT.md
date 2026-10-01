@@ -2,6 +2,20 @@
 
 Status: **unfinished; not a release**. Local branch `wip/adaptive-rotation` is a reviewable checkpoint. `main` retains version 0.5. No GitHub remote has been created or pushed.
 
+## Latest retry — supersedes the candidate description below
+
+The user made the phone available again. The first retry confirmed a photo without a bottom gap, but Camera's controls were cropped: `OneHanded:0:14` contains BOTH apps and wallpaper, so excluding that parent from app resizing was incorrect.
+
+The revised backend now registers Samsung's separate wallpaper-only `RemoteWallpaperAnim:1:1` display area (feature 10002), keeps that child at native display dimensions, and resizes all eight shared OneHanded areas. The child's surface stays local to the parent. Recovery clears all nine areas. Activation rejects an already-organized wallpaper area or unexpected existing wallpaper bounds.
+
+This revision was compiled to DEX, installed, and activated on the connected phone. Captures confirm:
+
+- The lock-screen photograph fills the usable area with no bottom black gap; the clock and shortcuts remain visible.
+- Camera's preview, shutter, zoom, and mode controls fit inside the reduced portrait area.
+- The filter remained active without forwarding errors through the observed sleep/wake checks; no real user touches had been forwarded at the last inspection, so this does not validate physical touch alignment.
+
+The physical Camera rotation/blink check remains pending user feedback. A requested rotation via `wm user-rotation` while keyguard/secure Camera was active did not change the reported display rotation, so it is not counted as a landscape test. The command was returned to `free` afterward. The five-minute trial remains experimental; the earlier Binder disconnection cause is still unresolved.
+
 ## Observed on the connected SM-S918W
 
 - The first adaptive trial made Camera's controls usable. The user confirmed Camera worked.
@@ -27,7 +41,7 @@ The mask is the natural top 927 pixels of the 1440 × 3088 display. It maps to t
 
 The backend changes Samsung's eight OneHanded display areas through hidden WindowContainerTransaction APIs and combines bounds changes with a synchronized surface transaction. This does not change the root display's logical dimensions and has not established foldable-equivalent behavior for all apps. `DisplayBridge.java` contains the hidden API adapters. `SafeArea.java` defines physical rotation geometry shared by the controller, guard, and filter.
 
-The exact wallpaper surface name `OneHanded:0:14` is specific to the observed Samsung display tree. Activation fails if it cannot identify exactly one matching wallpaper area. Recovery does not require that name and clears bounds, app bounds, and density-independent size overrides from all registered areas.
+The wallpaper-only surface name `RemoteWallpaperAnim:1:1` and feature 10002 are specific to the observed Samsung display tree. Activation fails if the child cannot be identified. Recovery clears bounds, app bounds, and density-independent size overrides from all registered areas, including the wallpaper child.
 
 The existing instrumentation connection remains a reliability limitation. Guard retention cannot make a dead injection connection work. Do not treat these changes as a fix for the observed Binder failure.
 

@@ -1,6 +1,6 @@
 # Experimental candidate status — October 1, 2026
 
-NOT RELEASE-VERIFIED. Read [EXPERIMENT.md](EXPERIMENT.md) for the latest evidence. Host checks and APK build/signature verification passed. The final candidate has not had on-device checks, and the previous trials failed the wallpaper/rotation visual checks. The instrumentation connection also died during a trial. Full-screen recovery succeeded afterward.
+NOT RELEASE-VERIFIED. Read [EXPERIMENT.md](EXPERIMENT.md) for the latest evidence. Host checks and APK build/signature verification passed. The latest retry has been activated: captures show the photo filling the usable area and Camera controls fitting in portrait. Physical rotation and touch alignment remain unverified; previous trials failed the rotation visual check. The instrumentation connection also died during a trial. Full-screen recovery succeeded afterward.
 
 The verification notes below are historical results from version 0.5 and earlier; they do not validate this experimental candidate.
 
