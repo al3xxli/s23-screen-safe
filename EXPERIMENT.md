@@ -1,6 +1,18 @@
 # Adaptive rotation investigation — October 1, 2026
 
-## Current status: 0.7, 20% protection and native navigation spacing
+## Current status: 0.8, Camera remains usable after rotation
+
+This section supersedes the earlier checkpoints. The retained correction removes the all-area redraw synchronization from the 0.7 display controller. It keeps the 20% strip, physical window bounds, inherited native insets, wallpaper geometry, and surface-position maintenance.
+
+On the connected phone, the 0.7 Camera test reproduced `Sync group 10384 timeout` after five seconds, with `Unfinished container: OneHanded:15:15` (the status-bar area). Subsequent rotation groups depended on that unfinished group. The captured landscape screen still used a portrait origin/crop, leaving most controls inaccessible. The controller marked the rotation applied before the synchronized surface callback arrived, and deferred later turns while that callback was outstanding.
+
+The retained version applies the window configuration without creating a new all-area sync group, then updates its owned surface geometry. Both landscape directions and rapid reversals completed without the reproduced timeout. The user reported "Still present, but at least it's usable" about the blink and then "You've fixed it for now" about the shift. This confirms the usability improvement, not seamless rendering.
+
+An app-area-only synchronization experiment completed in roughly 100–130 ms on the recorded ordinary turns, but still showed cropped intermediate frames. It is not retained. Private recordings show that plain configuration application also has brief intermediate crop/position mismatches; the harsh blink remains unresolved. Screen recordings letterbox landscape into a fixed portrait canvas, so black-pixel percentages cannot measure blink severity across orientations.
+
+The final controller has no pending-redraw state or asynchronous resize callback to block later rotations or reapply an obsolete orientation. Host regression checks simulate a status area that never redraws and verify rapid changes, native inset inheritance, wallpaper dimensions, coherent display snapshots, failed-apply retry, and isolation after restore. No Camera shutter or video capture was triggered. Private evidence remains outside Git.
+
+## Previous checkpoint: 0.7, 20% protection and native navigation spacing
 
 This section supersedes the 0.6 checkpoint descriptions below. The user confirmed the final 20% candidate: "Yes, everything fits now" for the bottom gap, navigation overlap, and lock-screen photograph.
 

@@ -22,8 +22,6 @@ public final class ScreenSafeBackend {
     static boolean ownsState;
     static int appliedRotation=-1, appliedDensity=-1;
     static Object displayManager;
-    static boolean layoutPending;
-    static long layoutStarted;
     static void position(Object st,SafeArea area)throws Exception{
         for(Object s:surfaces){
             if(s==wallpaperSurface){
@@ -36,7 +34,7 @@ public final class ScreenSafeBackend {
         }
     }
     static void maintainPosition()throws Exception{
-        if(restored||layoutPending||appliedRotation<0)return;
+        if(restored||appliedRotation<0)return;
         // System transitions can reset the organized surfaces without a bounds
         // change. Keep their transforms consistent with the physical WM bounds.
         Object tx=surfaceTxType.getConstructor().newInstance();
@@ -45,6 +43,7 @@ public final class ScreenSafeBackend {
     }
 
     static void layout() throws Exception {
+        if(restored)return;
         Object info=call(displayManager,"getDisplayInfo",new Class<?>[]{int.class},0);
         // Rotation callbacks can arrive before DisplayInfo has the new dimensions.
         // Use one coherent display snapshot instead of mixing those two epochs.
@@ -53,7 +52,6 @@ public final class ScreenSafeBackend {
         SafeArea snapshot=new SafeArea(rotation);
         if(info.getClass().getField("logicalWidth").getInt(info)!=snapshot.displayWidth
                 ||info.getClass().getField("logicalHeight").getInt(info)!=snapshot.displayHeight)return;
-        if(layoutPending)return;
         if(rotation==appliedRotation&&density==appliedDensity)return;
         final SafeArea area=new SafeArea(rotation);
         // Android and SurfaceFlinger must agree on the viewport origin. Local (0,0)
@@ -78,17 +76,12 @@ public final class ScreenSafeBackend {
             call(tx,"setScreenSizeDp",new Class<?>[]{tokenType,int.class,int.class},token,area.width()*160/density,area.height()*160/density);
             call(tx,"setSmallestScreenWidthDp",new Class<?>[]{tokenType,int.class},token,WIDTH*160/density);
         }
-        layoutPending=true;layoutStarted=SystemClock.uptimeMillis();
+        // A sync covering all display areas can wait for a hidden status bar to
+        // redraw, blocking subsequent rotations until BLAST's five-second timeout.
+        call(organizer,"applyTransaction",new Class<?>[]{wctType},tx);
         appliedRotation=rotation;appliedDensity=density;
-        DisplayBridge.sync(organizer,tx,new DisplayBridge.Ready(){public void run(Object st)throws Exception{
-          try{
-            if(!restored){
-            position(st,area);
-            }
-            call(st,"apply",new Class<?>[]{});
-          }finally{call(st,"close",new Class<?>[]{});layoutPending=false;}
-          if(!restored){System.out.println("LAYOUT "+area.rotation+" "+area.left+" "+area.top+" "+area.width()+" "+area.height());System.out.flush();layout();}
-        }});
+        maintainPosition();
+        System.out.println("LAYOUT "+area.rotation+" "+area.left+" "+area.top+" "+area.width()+" "+area.height());System.out.flush();
     }
 
     static Object call(Object target, String name, Class<?>[] types, Object... args) throws Exception {
@@ -235,7 +228,7 @@ public final class ScreenSafeBackend {
             control.setDaemon(true); control.start();
             final Handler handler=new Handler(Looper.getMainLooper());
             handler.postDelayed(new Runnable(){ public void run(){
-                if(stop || SystemClock.uptimeMillis()-heartbeat>8000 || (layoutPending&&SystemClock.uptimeMillis()-layoutStarted>6000)) {restore(); System.exit(0);}
+                if(stop || SystemClock.uptimeMillis()-heartbeat>8000) {restore(); System.exit(0);}
                 else {
                     try{layout();maintainPosition();}catch(Exception error){System.out.println("ERROR: Adaptive layout failed "+error);restore();System.exit(1);}
                     handler.postDelayed(this,250);

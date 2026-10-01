@@ -1,24 +1,28 @@
-# Screen Safe 0.7 preview verification — October 1, 2026
+# Screen Safe 0.8 preview verification — October 1, 2026
 
-## Implemented and checked
+## Camera rotation correction
 
-- Top 20% protection uses 618 of 3088 physical pixels, shared by the guard, filter, and display controller. The portrait viewport is `(0,618)-(1440,3088)`.
-- App display areas use physical window bounds and inherit app bounds. Android reports the native status bar at `(0,618)-(1440,743)` and navigation bar at `(0,2920)-(1440,3088)` in portrait. No extra bottom spacer or local inset source is installed.
-- Transitions were observed resetting the organized parent surface to an identity transform, while the configured viewport remained resized. The controller now reapplies its owned surface position/crop during its existing 250 ms check. Settled captures after app switching and in rotations 0, 1, and 3 no longer show the displaced/cropped app panel.
-- The wallpaper child keeps native dimensions with the same origin as its parent. Its crop is supplied by the parent.
-- Host checks passed 20% boundary rejection/acceptance, unchanged coordinates in the newly exposed band, mixed pointers, crossing cancellation, unsafe historical samples in a batched MOVE, lost UP, reused pointer IDs, interruption recovery, service reconnect, and rapid rotation reversal. Generated-event checks on the phone passed the updated filter suite; these checks do not inject input into other apps.
-- Clean compilation, DEX conversion, APK alignment, signing, and signature verification passed. Installed version is `0.7-preview` / code 7.
-- Restore was exercised from the new physical-bounds layout: all nine display areas returned to empty requested bounds, with no custom inset sources left behind. Protection was then reactivated without a timer.
-- Both forced landscape directions were tested, then the user's existing rotation preferences were restored to `lock 0` / fixed-to-user-rotation `default`. Sleep/wake retained an active filter with zero forwarding failures.
+- Reproduced the 0.7 failure on SM-S918W: an all-display-area synchronized resize waited five seconds for `OneHanded:15:15`, which contains the hidden status bar. Android logged a BLAST sync timeout and dependent rotation groups. A landscape capture showed Camera at its old portrait position with most controls cropped.
+- Removed that redraw dependency. Bounds now apply directly, then the controller positions/crops its owned surfaces. There is no outstanding resize callback or pending-layout flag to defer later turns.
+- Controlled Camera tests covered rotations 0 → 1 → 0 → 3 → 0 and rapid reversals. Both landscape directions retained usable controls and the filter remained active with zero forwarding failures. The captured revised run did not contain the reproduced sync timeout.
+- The user confirmed the shift correction: "Still present, but at least it's usable" (blink versus usability), then "You've fixed it for now."
+- The additional app-only synchronized-redraw trial still showed transient cropping, so it was discarded. The user-confirmed direct-apply behavior is retained.
 
-## User validation and limits
+## Automated checks and build
 
-The user confirmed the final candidate: "Yes, everything fits now" when asked about the bottom gap, navigation overlap, and lock-screen photograph. The first local-inset trial was rejected after the user reported a large bottom gap; that implementation is not retained.
+- Gesture/lifecycle host regressions passed: protected-boundary filtering, unchanged forwarded coordinates, unsafe historical samples, mixed pointers, interrupted streams, service reconnect, and rapid rotation reversals.
+- New controller host regressions passed with a status area that never sends a redraw callback. They cover all four viewport rotations, immediate reversals, physical bounds, inherited app insets, native wallpaper dimensions, inconsistent display snapshots, failure retry, surface repair, and no changes after restoration.
+- The same controller suite was run against the 0.7 backend as a negative control and failed at the expected stalled-rotation assertion.
+- Host tests use Android API fakes; they are not visual or physical-touch tests. The unchanged filter previously passed generated-event checks on the phone in 0.7.
+- Clean Java compilation, DEX conversion, APK alignment, signing, and signature verification passed for `0.8-preview` / code 8.
+- The final build was reactivated without a timer. The installed backend SHA-256 matched the saved DEX; the filter was active with zero forwarding failures, and original rotation/USB settings were verified.
 
-Rotation blink remains unresolved. The position check restores settled geometry but is not synchronized to every animation frame. Long-term power use/reliability, complete physical-coordinate calibration, reverse-portrait system navigation, every third-party app, and ghost touches reported outside the protected strip are not established by these checks.
+## Preserved behavior and limitations
 
-## USB survival workaround retained
+The protected strip remains 618 of 3088 physical pixels. The portrait viewport is `(0,618)-(1440,3088)`. App bounds inherit normally, with no extra navigation spacer or synthetic inset. The wallpaper child retains full display dimensions at the parent's physical origin. The 250 ms surface repair remains active. Those layout choices were user-confirmed in 0.7 and are unchanged here.
 
-The previous session failure was traced to the default USB tethering configuration switching to charging on lock and back on unlock, restarting adbd and killing the controller. The phone remains on charging with USB debugging enabled (`sec_charging,adb`). The user previously confirmed a successful unplug/lock/unlock/reconnect cycle with that configuration, independently verified by surviving controller/backend PIDs and zero forwarding failures. `nohup setsid` alone did not fix USB-mode restarts. Rebooting or changing USB mode can still require reactivation.
+**Harsh rotation blink is still unresolved.** Frame inspection shows brief intermediate crop/position mismatches. This revision fixes the reproduced prolonged unusable layout; it does not guarantee every app or transition. Long-term reliability/power use, full physical-touch calibration, reverse-portrait device navigation, and ghost touches reported outside the strip are not established.
 
-Private captures and logs remain outside Git. No camera shutter, purchase, or account-setting action was performed.
+Controlled rotation tests restored the user's `lock 0` / fixed-to-user-rotation `default` preferences. The charging USB workaround (`sec_charging,adb`) remains in place; its unplug/lock/unlock survival was user-confirmed earlier. Normal activation remains untimed. Phone reboot, changing USB mode, or ending instrumentation can require reactivation.
+
+Private phone captures/logs and the rejected experiment remain outside Git. No Camera photograph or Camera video was taken.

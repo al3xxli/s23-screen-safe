@@ -1,6 +1,6 @@
-# Screen Safe 0.7 preview — S23 Ultra
+# Screen Safe 0.8 preview — S23 Ultra
 
-This preview blocks the damaged top **20%** and places app windows in the physical usable area so Android supplies its normal status- and navigation-bar insets. **Rotation blink remains unresolved.**
+This preview blocks the damaged top **20%** and places app windows in the physical usable area so Android supplies its normal status- and navigation-bar insets. Version 0.8 fixes the reproduced Camera landscape stall: a hidden status bar could delay the layout for five seconds. The user confirmed Camera stays usable with this correction. **Rotation blink remains unresolved.**
 
 Tested device: Samsung SM-S918W, Android 16 / One UI 8.5, physical resolution 1440 × 3088. No root is required. The natural top 618 pixels (20%, rounded up) are masked; the interface uses the remaining area. The damaged edge follows rotation.
 
@@ -24,6 +24,7 @@ Developer commands for the tested setting are `adb shell svc usb setScreenUnlock
 
 ## Changes and verification
 
+- Apply rotation bounds without waiting for every system display area to redraw. A hidden status bar must not block Camera's next layout.
 - Keep the wallpaper-only child at native dimensions and at the same origin as the smaller app viewport.
 - Use physical viewport bounds, inherited app bounds, and the native system-bar insets. No extra navigation spacer or custom inset source is added.
 - Reapply surface position/crop in the existing 250 ms controller check because transitions can reset them without changing window configuration.
@@ -31,7 +32,7 @@ Developer commands for the tested setting are `adb shell svc usb setScreenUnlock
 - Avoid redundant guard relayouts and handle rapid queued rotation reversals.
 - Retain the interrupted-gesture and service-reconnection recovery from 0.5.
 
-Host checks, on-device generated-event checks for the updated filter, APK compilation, and signature verification passed. Settled captures in portrait and both landscape directions fit the viewport. Restore clears all nine display areas. The user confirmed that the corrected app spacing, navigation overlap, and 20% lock-screen photo all fit. Smooth transitions, comprehensive physical touch calibration, all third-party apps, and long-term reliability remain unverified or unresolved. See [EXPERIMENT.md](EXPERIMENT.md) and [VERIFICATION.md](VERIFICATION.md).
+Host gesture and controller checks, APK compilation, and signature verification passed. The unchanged filter previously passed on-device generated-event checks. Camera stays positioned in controlled rotations in both landscape directions and rapid reversals; the user confirmed usability. The previous 20% app spacing and wallpaper geometry are retained. Smooth transitions, comprehensive physical touch calibration, all third-party apps, and long-term reliability remain unverified or unresolved. See [EXPERIMENT.md](EXPERIMENT.md) and [VERIFICATION.md](VERIFICATION.md).
 
 The filter rejects a contact reported inside the protected strip for its entire gesture, including batched samples, and forwards accepted coordinates unchanged. It cannot identify a hardware-generated ghost touch reported outside the strip.
 
@@ -39,7 +40,7 @@ The app has no network permission and does not save or transmit touch events. Ot
 
 ## Development
 
-Build `source/build.ps1` with JDK 17, Android platform 36, Build Tools 36, and R8. Host checks: `python tests/host_checks.py --jdk <JDK-folder>`.
+Build `source/build.ps1` with JDK 17, Android platform 36, Build Tools 36, and R8. Run both host suites: `python tests/host_checks.py --jdk <JDK-folder>` and `python tests/backend_checks.py --jdk <JDK-folder>`. The controller suite includes a non-drawing status area, immediate rotation reversals, failed-apply retry, and late callbacks after restoration; host checks do not establish smooth device rendering.
 
 For on-device generated-event checks, end protection first and run `phone-tools\adb.exe shell am instrument -w -r -e test checks ca.screensafe.app/.SessionRunner`, then reactivate. Instrumentation checks replace the active session.
 

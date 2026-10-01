@@ -3,7 +3,6 @@ import java.lang.reflect.*;
 
 /** Narrow adapters for Samsung's hidden window APIs, resolved by name on the phone. */
 final class DisplayBridge {
-    interface Ready {void run(Object transaction) throws Exception;}
     interface Rotation {void changed(int rotation);}
     static Object proxy(final Class<?> type,final Binder binder){
         return Proxy.newProxyInstance(type.getClassLoader(),new Class<?>[]{type},new InvocationHandler(){
@@ -18,23 +17,6 @@ final class DisplayBridge {
     }
     static int transactionCode(String type,String method)throws Exception{
         Field f=Class.forName(type+"$Stub").getDeclaredField("TRANSACTION_"+method);f.setAccessible(true);return f.getInt(null);
-    }
-    static void sync(Object organizer,Object transaction,final Ready ready)throws Exception{
-        final String name="android.window.IWindowContainerTransactionCallback";
-        final int code=transactionCode(name,"onTransactionReady");
-        final Parcelable.Creator<?> creator=(Parcelable.Creator<?>)Class.forName("android.view.SurfaceControl$Transaction").getField("CREATOR").get(null);
-        Binder binder=new Binder(){protected boolean onTransact(int id,Parcel data,Parcel reply,int flags)throws RemoteException{
-            if(id==INTERFACE_TRANSACTION){if(reply!=null)reply.writeString(name);return true;}
-            if(id!=code)return super.onTransact(id,data,reply,flags);
-            data.enforceInterface(name);data.readInt();final Object surfaceTransaction=data.readTypedObject(creator);
-            new Handler(Looper.getMainLooper()).post(new Runnable(){public void run(){
-                try{ready.run(surfaceTransaction);}catch(Exception error){error.printStackTrace(System.out);ScreenSafeBackend.stop=true;}
-            }});return true;
-        }};
-        Class<?> callback=Class.forName(name);
-        Method getter=Class.forName("android.window.WindowOrganizer").getDeclaredMethod("getWindowOrganizerController");
-        getter.setAccessible(true);Object controller=getter.invoke(null);
-        ScreenSafeBackend.call(controller,"applySyncTransaction",new Class<?>[]{transaction.getClass(),callback},transaction,proxy(callback,binder));
     }
     static Object wm,watcher;
     static void watch(final Rotation listener)throws Exception{
