@@ -151,7 +151,7 @@ public class SessionRunner extends Instrumentation {
         guardRotation=-1;
         guard=new View(context){public boolean onTouchEvent(MotionEvent event){return true;}};
         guard.setBackgroundColor(Color.BLACK);
-        WindowManager.LayoutParams p=new WindowManager.LayoutParams(1440,927,2024,WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE|WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN|WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS|WindowManager.LayoutParams.FLAG_SPLIT_TOUCH,PixelFormat.OPAQUE);
+        WindowManager.LayoutParams p=new WindowManager.LayoutParams(SafeArea.WIDTH,SafeArea.STRIP,2024,WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE|WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN|WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS|WindowManager.LayoutParams.FLAG_SPLIT_TOUCH,PixelFormat.OPAQUE);
         p.gravity=Gravity.TOP|Gravity.LEFT;p.setTitle("Screen Safe touch guard");p.packageName=getTargetContext().getPackageName();
         p.layoutInDisplayCutoutMode=WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS;p.setFitInsetsTypes(0);manager.addView(guard,p);
         displayManager.registerDisplayListener(displayListener,new Handler(Looper.getMainLooper()));updateGuard();

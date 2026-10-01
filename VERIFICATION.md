@@ -1,21 +1,24 @@
-# Preview verification — October 1, 2026
+# Screen Safe 0.7 preview verification — October 1, 2026
 
-## Confirmed
+## Implemented and checked
 
-- The user confirmed the lock-screen photograph is fixed.
-- Captures show the photo filling the usable area and Camera's portrait controls fitting.
-- The user's rotation test produced rotations 0 and 1 and 32 forwarded events with zero injection failures.
-- Observed sleep/wake checks retained active filtering.
-- The final APK's on-device generated-event checks passed: filtering, missing pointer-up, reused IDs, interruption recovery, failed cancellation, and masks in all four rotations.
-- Host checks also passed queued-event discard, service reconnect, enable/disable ordering, and rapid rotation reversals.
-- Clean compilation, DEX conversion, resource build, alignment, signing, and signature verification passed.
-- Recovery cleared the nine display areas. Rotation preferences were verified as `free` and fixed-to-user-rotation `default`.
-- Final normal activation was untimed, with the filter active and zero forwarding errors at verification.
+- Top 20% protection uses 618 of 3088 physical pixels, shared by the guard, filter, and display controller. The portrait viewport is `(0,618)-(1440,3088)`.
+- App display areas use physical window bounds and inherit app bounds. Android reports the native status bar at `(0,618)-(1440,743)` and navigation bar at `(0,2920)-(1440,3088)` in portrait. No extra bottom spacer or local inset source is installed.
+- Transitions were observed resetting the organized parent surface to an identity transform, while the configured viewport remained resized. The controller now reapplies its owned surface position/crop during its existing 250 ms check. Settled captures after app switching and in rotations 0, 1, and 3 no longer show the displaced/cropped app panel.
+- The wallpaper child keeps native dimensions with the same origin as its parent. Its crop is supplied by the parent.
+- Host checks passed 20% boundary rejection/acceptance, unchanged coordinates in the newly exposed band, mixed pointers, crossing cancellation, unsafe historical samples in a batched MOVE, lost UP, reused pointer IDs, interruption recovery, service reconnect, and rapid rotation reversal. Generated-event checks on the phone passed the updated filter suite; these checks do not inject input into other apps.
+- Clean compilation, DEX conversion, APK alignment, signing, and signature verification passed. Installed version is `0.7-preview` / code 7.
+- Restore was exercised from the new physical-bounds layout: all nine display areas returned to empty requested bounds, with no custom inset sources left behind. Protection was then reactivated without a timer.
+- Both forced landscape directions were tested, then the user's existing rotation preferences were restored to `lock 0` / fixed-to-user-rotation `default`. Sleep/wake retained an active filter with zero forwarding failures.
 
-## Still unresolved
+## User validation and limits
 
-- The user reports a harsh rotation blink. Recording reproduces a bad intermediate frame. Three timing/synchronization changes made rendering worse and were reverted.
-- Landscape physical touch alignment and all app layouts are not comprehensively verified.
-- USB disconnection ended the control session at 10:48:04, leaving the installed 0.6-preview APK with a resized layout and inactive filter (one forwarding failure). Logs show a dead UiAutomation owner as adbd restarted. Reactivation restored the wallpaper geometry and active filtering. The launchers now use `nohup setsid` so instrumentation has its own session and process group; the new PID and PGID matched, with parent PID 1 and no terminal. The physical unplug/lock test killed that detached session too, so `setsid` alone does not resolve this failure. USB logs then identified `rndis,adb` changing to `sec_charging,adb` on lock and back on unlock, restarting adbd each time. The phone default was changed from USB tethering to charging (`svc usb setScreenUnlockedFunctions`, then `svc usb setFunctions`, both with no function argument), followed by reactivation. Debugging remains enabled. The user then confirmed that unplugging, locking, unlocking, and reconnecting preserved both layout and touch. ADB independently verified the same controller PID 13962, backend PID 14100, and app PID 13995; filtering remained active, with 230 forwarded events and zero failures. This verifies the tested cycle, not indefinite survival or survival after changing USB mode again. Long-term reliability is not established.
+The user confirmed the final candidate: "Yes, everything fits now" when asked about the bottom gap, navigation overlap, and lock-screen photograph. The first local-inset trial was rejected after the user reported a large bottom gap; that implementation is not retained.
 
-The final preview retains the confirmed wallpaper backend from `c2dcd39`. Normal activation is untimed; `Trial.ps1` is the optional five-minute developer trial. The 0.5 baseline remains on `main`. Details are in [EXPERIMENT.md](EXPERIMENT.md).
+Rotation blink remains unresolved. The position check restores settled geometry but is not synchronized to every animation frame. Long-term power use/reliability, complete physical-coordinate calibration, reverse-portrait system navigation, every third-party app, and ghost touches reported outside the protected strip are not established by these checks.
+
+## USB survival workaround retained
+
+The previous session failure was traced to the default USB tethering configuration switching to charging on lock and back on unlock, restarting adbd and killing the controller. The phone remains on charging with USB debugging enabled (`sec_charging,adb`). The user previously confirmed a successful unplug/lock/unlock/reconnect cycle with that configuration, independently verified by surviving controller/backend PIDs and zero forwarding failures. `nohup setsid` alone did not fix USB-mode restarts. Rebooting or changing USB mode can still require reactivation.
+
+Private captures and logs remain outside Git. No camera shutter, purchase, or account-setting action was performed.

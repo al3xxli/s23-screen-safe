@@ -1,8 +1,8 @@
-# Screen Safe 0.6 preview — S23 Ultra
+# Screen Safe 0.7 preview — S23 Ultra
 
-The lock-screen photograph now fills the usable screen area. **Rotation still produces a harsh blink.** This preview retains the confirmed wallpaper fix while rotation work remains unfinished.
+This preview blocks the damaged top **20%** and places app windows in the physical usable area so Android supplies its normal status- and navigation-bar insets. **Rotation blink remains unresolved.**
 
-Tested device: Samsung SM-S918W, Android 16 / One UI 8.5, physical resolution 1440 × 3088. No root is required. The natural top 927 pixels are masked; the interface uses the remaining area. The damaged edge follows rotation.
+Tested device: Samsung SM-S918W, Android 16 / One UI 8.5, physical resolution 1440 × 3088. No root is required. The natural top 618 pixels (20%, rounded up) are masked; the interface uses the remaining area. The damaged edge follows rotation.
 
 ## Start or restore
 
@@ -24,12 +24,16 @@ Developer commands for the tested setting are `adb shell svc usb setScreenUnlock
 
 ## Changes and verification
 
-- Keep Samsung's wallpaper-only child at native dimensions while clipping it inside the smaller app viewport.
-- Update app bounds, guard, and touch mask for each orientation.
+- Keep the wallpaper-only child at native dimensions and at the same origin as the smaller app viewport.
+- Use physical viewport bounds, inherited app bounds, and the native system-bar insets. No extra navigation spacer or custom inset source is added.
+- Reapply surface position/crop in the existing 250 ms controller check because transitions can reset them without changing window configuration.
+- Update the guard and touch filter from the same 20% geometry in each orientation.
 - Avoid redundant guard relayouts and handle rapid queued rotation reversals.
 - Retain the interrupted-gesture and service-reconnection recovery from 0.5.
 
-The user confirmed the lock-screen fix. Camera controls fit in portrait. Host checks, on-device generated-event checks, APK compilation, and signature verification passed. Smooth rotation, full landscape touch calibration, all third-party apps, and long-term reliability remain unverified or unresolved. See [EXPERIMENT.md](EXPERIMENT.md) and [VERIFICATION.md](VERIFICATION.md).
+Host checks, on-device generated-event checks for the updated filter, APK compilation, and signature verification passed. Settled captures in portrait and both landscape directions fit the viewport. Restore clears all nine display areas. The user confirmed that the corrected app spacing, navigation overlap, and 20% lock-screen photo all fit. Smooth transitions, comprehensive physical touch calibration, all third-party apps, and long-term reliability remain unverified or unresolved. See [EXPERIMENT.md](EXPERIMENT.md) and [VERIFICATION.md](VERIFICATION.md).
+
+The filter rejects a contact reported inside the protected strip for its entire gesture, including batched samples, and forwards accepted coordinates unchanged. It cannot identify a hardware-generated ghost touch reported outside the strip.
 
 The app has no network permission and does not save or transmit touch events. Other enabled accessibility services are preserved; touch-exploration services such as TalkBack are not supported concurrently.
 

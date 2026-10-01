@@ -42,9 +42,20 @@ final class TouchFilterChecks {
         f=fresh();event(f,0,new int[]{0},1500);event(f,5|(1<<8),new int[]{0,2},1500,2000);
         event(f,2,new int[]{0,2},1400,2100);event(f,6,new int[]{0,2},1400,2100);event(f,1,new int[]{2},2100);actions(0,5,2,6,1);
         require(sent.get(1).getPointerCount()==2&&sent.get(3).getActionIndex()==0,"Multitouch changed");
-        f=fresh();event(f,0,new int[]{0},1000);event(f,2,new int[]{0},900);event(f,2,new int[]{0},1200);event(f,1,new int[]{0},1200);actions(0,3);
-        f=fresh();event(f,0,new int[]{0},926.99f);event(f,1,new int[]{0},926.99f);actions();
-        event(f,0,new int[]{0},927);event(f,1,new int[]{0},927);actions(0,1);
+        f=fresh();event(f,0,new int[]{0},1000);event(f,2,new int[]{0},600);event(f,2,new int[]{0},1200);event(f,1,new int[]{0},1200);actions(0,3);
+        f=fresh();event(f,0,new int[]{0},617.99f);event(f,1,new int[]{0},617.99f);actions();
+        event(f,0,new int[]{0},618);event(f,1,new int[]{0},618);actions(0,1);
+        // The newly usable 20-30% band forwards unchanged physical coordinates.
+        f=fresh();point(f,0,700,750);point(f,1,700,750);actions(0,1);
+        for(MotionEvent e:sent)require(e.getX(0)==700&&e.getY(0)==750,"Accepted coordinates were remapped");
+        // A protected sample hidden in a batched MOVE must cancel even if the latest is safe.
+        f=fresh();point(f,0,700,750);
+        MotionEvent.PointerProperties bp=new MotionEvent.PointerProperties();bp.id=0;bp.toolType=MotionEvent.TOOL_TYPE_FINGER;
+        MotionEvent.PointerCoords bc=new MotionEvent.PointerCoords();bc.x=700;bc.y=500;bc.pressure=1;
+        MotionEvent batch=MotionEvent.obtain(1000,time+=10,2,1,new MotionEvent.PointerProperties[]{bp},new MotionEvent.PointerCoords[]{bc},0,0,1,1,6,0,InputDevice.SOURCE_TOUCHSCREEN,0);
+        bc.y=750;batch.addBatch(time+=10,new MotionEvent.PointerCoords[]{bc},0);
+        try{f.filter(batch);}finally{batch.recycle();}
+        point(f,1,700,750);actions(0,3);
         // Lost ghost UP followed by reuse of its pointer ID must not poison new fingers.
         f=fresh();event(f,0,new int[]{0},100);event(f,5|(1<<8),new int[]{0,7},100,1700);
         event(f,2,new int[]{7},1750);event(f,5|(1<<8),new int[]{7,0},1750,1800);

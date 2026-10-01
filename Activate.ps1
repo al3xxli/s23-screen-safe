@@ -50,7 +50,7 @@ try {
     if(-not $taskFilterReady){throw 'Protection did not start. Check the status in Screen Safe. Its touch filter may need enabling in Accessibility settings.'}
     $taskLog=Invoke-Phone @('shell','cat','/data/local/tmp/screensafe-session.log')
     if($taskLog -match 'error=|Process crashed|INSTRUMENTATION_FAILED'){throw ($taskLog -join "`n")}
-    Write-Host 'Adaptive preview active with the wallpaper fix. Rotation blink remains unresolved. This session has no five-minute timeout.'
+    Write-Host '20% protection active with native navigation spacing. Rotation blink remains unresolved. This session has no five-minute timeout.'
 } catch {
     Write-Host ('Screen Safe: '+$_.Exception.Message) -ForegroundColor Red
     exit 1

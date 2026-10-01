@@ -27,7 +27,7 @@ public class MotionEvent {
  public static final int ACTION_DOWN=0,ACTION_UP=1,ACTION_MOVE=2,ACTION_CANCEL=3,ACTION_POINTER_DOWN=5,ACTION_POINTER_UP=6,TOOL_TYPE_FINGER=1;
  public static class PointerProperties {public int id,toolType;}
  public static class PointerCoords {public float x,y,pressure,size;}
- private long down,time; private int action; private PointerProperties[] props;private PointerCoords[] coords;
+ private java.util.ArrayList<PointerCoords[]> history=new java.util.ArrayList<>(); private long down,time; private int action; private PointerProperties[] props;private PointerCoords[] coords;
  public static MotionEvent obtain(long d,long t,int a,int n,PointerProperties[] p,PointerCoords[] c,int meta,int buttons,float xp,float yp,int device,int edge,int source,int flags){
   MotionEvent e=new MotionEvent();e.down=d;e.time=t;e.action=a;e.props=new PointerProperties[n];e.coords=new PointerCoords[n];
   for(int i=0;i<n;i++){e.props[i]=new PointerProperties();e.props[i].id=p[i].id;e.props[i].toolType=p[i].toolType;e.coords[i]=new PointerCoords();e.coords[i].x=c[i].x;e.coords[i].y=c[i].y;e.coords[i].pressure=c[i].pressure;e.coords[i].size=c[i].size;}return e;
@@ -35,8 +35,9 @@ public class MotionEvent {
  public static MotionEvent obtain(MotionEvent e){return obtain(e.down,e.time,e.action,e.props.length,e.props,e.coords,0,0,1,1,0,0,4098,0);}
  public int getActionMasked(){return action&255;}public int getActionIndex(){return action>>8;}public void setAction(int a){action=a;}
  public int getPointerCount(){return props.length;}public int getPointerId(int i){return props[i].id;}public float getY(int i){return coords[i].y;}
- public float getX(int i){return coords[i].x;}public float getHistoricalX(int i,int h){throw new AssertionError();}
- public int getHistorySize(){return 0;}public float getHistoricalY(int i,int h){throw new AssertionError();}
+ public float getX(int i){return coords[i].x;}public float getHistoricalX(int i,int h){return history.get(h)[i].x;}
+ public int getHistorySize(){return history.size();}public float getHistoricalY(int i,int h){return history.get(h)[i].y;}
+ public void addBatch(long t,PointerCoords[] c,int meta){history.add(coords);coords=new PointerCoords[c.length];for(int i=0;i<c.length;i++){coords[i]=new PointerCoords();coords[i].x=c[i].x;coords[i].y=c[i].y;coords[i].pressure=c[i].pressure;}time=t;}
  public long getEventTime(){return time;}public long getDownTime(){return down;}
  public void getPointerProperties(int i,PointerProperties p){p.id=props[i].id;p.toolType=props[i].toolType;}
  public void getPointerCoords(int i,PointerCoords c){c.x=coords[i].x;c.y=coords[i].y;c.pressure=coords[i].pressure;c.size=coords[i].size;}
@@ -67,13 +68,15 @@ public class HostChecks {
   System.out.println("PASS: rapid rotation reversals keep the touch filter aligned.");
   for(int r=0;r<4;r++){
    ca.screensafe.core.SafeArea a=new ca.screensafe.core.SafeArea(r);
-   TouchFilterChecks.require(a.width()*a.height()==1440*2161,"Area changed with rotation");
-   TouchFilterChecks.require(a.maskWidth()*a.maskHeight()==1440*927,"Mask area changed");
+   TouchFilterChecks.require(a.width()*a.height()==1440*2470,"Area changed with rotation");
+   TouchFilterChecks.require(a.maskWidth()*a.maskHeight()==1440*618,"Mask area changed");
    TouchFilterChecks.require(a.contains(a.left,a.top),"Usable boundary rejected");
    TouchFilterChecks.require(!a.contains(a.maskLeft()+1,a.maskTop()+1),"Damaged edge accepted");
    TouchFilterChecks.require(!a.contains(a.right,a.bottom),"Outside display accepted");
   }
   System.out.println("PASS: all four rotations preserve usable area and physical mask.");
+  System.out.println("PASS: 20% boundary, unmodified forwarded coordinates, and batched unsafe samples.");
+
  }
 }'''
 }

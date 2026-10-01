@@ -2,7 +2,7 @@ package ca.screensafe.core;
 
 /** Coordinates in the rotated, full physical display. The fault stays at the natural top. */
 public final class SafeArea {
-    public static final int WIDTH=1440, HEIGHT=3088, STRIP=927;
+    public static final int WIDTH=1440, HEIGHT=3088, STRIP=(HEIGHT+4)/5;
     public final int rotation, left, top, right, bottom, displayWidth, displayHeight;
     public SafeArea(int rotation){
         this.rotation=rotation&3;

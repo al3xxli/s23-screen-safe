@@ -9,7 +9,7 @@ import ca.screensafe.core.SafeArea;
 
 /** Shell-side controller for the experimentally verified SM-S918W display areas. */
 public final class ScreenSafeBackend {
-    static final int WIDTH=1440, HEIGHT=3088, PROTECTED_TOP=927;
+    static final int WIDTH=SafeArea.WIDTH, HEIGHT=SafeArea.HEIGHT;
     static Class<?> organizerType, wctType, surfaceType, surfaceTxType, rectType, tokenType;
     static Object organizer;
     static final List<Object> surfaces = new ArrayList<>(), tokens = new ArrayList<>();
@@ -35,6 +35,14 @@ public final class ScreenSafeBackend {
             call(st,"setWindowCrop",new Class<?>[]{surfaceType,int.class,int.class},s,area.width(),area.height());
         }
     }
+    static void maintainPosition()throws Exception{
+        if(restored||layoutPending||appliedRotation<0)return;
+        // System transitions can reset the organized surfaces without a bounds
+        // change. Keep their transforms consistent with the physical WM bounds.
+        Object tx=surfaceTxType.getConstructor().newInstance();
+        try{position(tx,new SafeArea(appliedRotation));call(tx,"apply",new Class<?>[]{});}
+        finally{call(tx,"close",new Class<?>[]{});}
+    }
 
     static void layout() throws Exception {
         Object info=call(displayManager,"getDisplayInfo",new Class<?>[]{int.class},0);
@@ -48,21 +56,25 @@ public final class ScreenSafeBackend {
         if(layoutPending)return;
         if(rotation==appliedRotation&&density==appliedDensity)return;
         final SafeArea area=new SafeArea(rotation);
-        Object bounds=rectType.getConstructor(int.class,int.class,int.class,int.class).newInstance(0,0,area.width(),area.height());
+        // Android and SurfaceFlinger must agree on the viewport origin. Local (0,0)
+        // configuration plus an independent surface offset loses native bar insets
+        // and snaps back to zero when Android finishes a rotation/app transition.
+        Object bounds=rectType.getConstructor(int.class,int.class,int.class,int.class).newInstance(area.left,area.top,area.right,area.bottom);
         Object tx=wctType.getConstructor().newInstance();
         for(int i=0;i<tokens.size();i++){
             Object token=tokens.get(i);
             // The wallpaper-only child retains native dimensions. Its shared
             // OneHanded parent still resizes apps and clips everything to the mask.
+            // Give this child the same origin as its parent so its local position is zero.
             if(token==wallpaperToken){
-                Object nativeBounds=rectType.getConstructor(int.class,int.class,int.class,int.class).newInstance(0,0,area.displayWidth,area.displayHeight);
+                Object nativeBounds=rectType.getConstructor(int.class,int.class,int.class,int.class).newInstance(area.left,area.top,area.left+area.displayWidth,area.top+area.displayHeight);
                 call(tx,"setBounds",new Class<?>[]{tokenType,rectType},token,nativeBounds);
                 call(tx,"setAppBounds",new Class<?>[]{tokenType,rectType},token,nativeBounds);
                 call(tx,"setScreenSizeDp",new Class<?>[]{tokenType,int.class,int.class},token,area.displayWidth*160/density,area.displayHeight*160/density);
                 continue;
             }
             call(tx,"setBounds",new Class<?>[]{tokenType,rectType},token,bounds);
-            call(tx,"setAppBounds",new Class<?>[]{tokenType,rectType},token,bounds);
+            call(tx,"setAppBounds",new Class<?>[]{tokenType,rectType},token,null);
             call(tx,"setScreenSizeDp",new Class<?>[]{tokenType,int.class,int.class},token,area.width()*160/density,area.height()*160/density);
             call(tx,"setSmallestScreenWidthDp",new Class<?>[]{tokenType,int.class},token,WIDTH*160/density);
         }
@@ -143,19 +155,23 @@ public final class ScreenSafeBackend {
             String containers=command("dumpsys","activity","containers");
             for(String line:containers.split("\n"))if(line.contains("RemoteWallpaperAnim:")){
                 boolean empty=line.contains("requested-bounds=[0,0][0,0]");
-                boolean ours=line.contains("requested-bounds=[0,0][1440,3088]")||line.contains("requested-bounds=[0,0][3088,1440]");
+                boolean ours=line.contains("requested-bounds=[0,0][1440,3088]")||line.contains("requested-bounds=[0,0][3088,1440]")
+                        ||line.contains("requested-bounds=[0,618][1440,3706]")||line.contains("requested-bounds=[618,0][3706,1440]");
                 if(!empty&&!(recovering&&stateFile.exists()&&ours))throw new IllegalStateException("Unexpected wallpaper display-area bounds.");
             }
             int count=0;
             for(String line:containers.split("\n")) if(line.contains("OneHanded:")) {
                 count++;
                 boolean empty=line.contains("requested-bounds=[0,0][0,0]");
-                // Permit recovery of the 10%, 20%, and current 30% versions.
-                boolean ours=line.contains("requested-bounds=[0,"+PROTECTED_TOP+"][1440,3088]")
+                // Permit recovery of prior 10/20/30% layouts and both adaptive viewport sizes.
+                boolean ours=line.contains("requested-bounds=[0,927][1440,3088]")
                         || line.contains("requested-bounds=[927,0][3088,1440]")
                         || line.contains("requested-bounds=[0,0][1440,2161]")
                         || line.contains("requested-bounds=[0,0][2161,1440]")
+                        || line.contains("requested-bounds=[0,0][1440,2470]")
+                        || line.contains("requested-bounds=[0,0][2470,1440]")
                         || line.contains("requested-bounds=[0,618][1440,3088]")
+                        || line.contains("requested-bounds=[618,0][3088,1440]")
                         || line.contains("requested-bounds=[0,309][1440,3088]");
                 if(!empty && !(recovering && stateFile.exists() && ours)) throw new IllegalStateException("Unexpected existing display-area bounds.");
             }
@@ -221,7 +237,7 @@ public final class ScreenSafeBackend {
             handler.postDelayed(new Runnable(){ public void run(){
                 if(stop || SystemClock.uptimeMillis()-heartbeat>8000 || (layoutPending&&SystemClock.uptimeMillis()-layoutStarted>6000)) {restore(); System.exit(0);}
                 else {
-                    try{layout();}catch(Exception error){System.out.println("ERROR: Adaptive layout failed "+error);restore();System.exit(1);}
+                    try{layout();maintainPosition();}catch(Exception error){System.out.println("ERROR: Adaptive layout failed "+error);restore();System.exit(1);}
                     handler.postDelayed(this,250);
                 }
             }},250);

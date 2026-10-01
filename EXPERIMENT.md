@@ -1,5 +1,16 @@
 # Adaptive rotation investigation — October 1, 2026
 
+## Current status: 0.7, 20% protection and native navigation spacing
+
+This section supersedes the 0.6 checkpoint descriptions below. The user confirmed the final 20% candidate: "Yes, everything fits now" for the bottom gap, navigation overlap, and lock-screen photograph.
+
+The shared protected strip is now 618 pixels. App display-area bounds use their physical origin, app bounds inherit normally, and Android supplies the native system-bar insets. The wallpaper child keeps native dimensions and shares its parent's physical origin, keeping its local surface position zero. The controller's existing 250 ms check also reapplies owned surface positions/crops after transitions. The phone had been observed resetting those transforms while leaving the smaller configuration intact, explaining the top shift and large bottom gap.
+
+An earlier 20% trial added a local navigation inset and reduced app bounds. It was rejected after the user reported a large gap; that implementation is absent from the retained source. The final approach adds no global spacer or synthetic navigation inset. Screen Safe's own edge-to-edge activity respects the reported native navigation inset.
+
+Host and phone filter checks passed the 20% boundary and batched-event cases. Settled portrait and both landscape captures fit; restore cleared all nine areas. The charging USB workaround remains applied. Rotation blink and long-term power/performance are still unverified or unresolved. See VERIFICATION.md for the current evidence and limits.
+
+
 Status: **unfinished; not a release**. Local branch `wip/adaptive-rotation` is a reviewable checkpoint. `main` retains version 0.5. No GitHub remote has been created or pushed.
 
 ## Final status after user feedback and rotation investigation
