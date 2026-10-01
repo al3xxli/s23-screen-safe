@@ -2,6 +2,24 @@
 
 Status: **unfinished; not a release**. Local branch `wip/adaptive-rotation` is a reviewable checkpoint. `main` retains version 0.5. No GitHub remote has been created or pushed.
 
+## Final status after user feedback and rotation investigation
+
+The user confirmed: "Harsh blink still there, lockscreen is fixed though."
+
+The confirmed wallpaper revision from `c2dcd39` is retained. During the user's physical rotation test, the backend recorded rotations 0 and 1 and the filter recorded 32 forwarded events with zero failures. This demonstrates forwarding, not complete physical-coordinate calibration.
+
+A controlled screen recording reproduced a nearly black intermediate frame. Samsung logs already report seamless Camera rotation. Native rotation and the adapter's following layout change are separate operations; their interaction is a likely cause, not a fully established diagnosis.
+
+Three timing experiments were rejected and reverted: applying the whole synchronized resize from the early callback produced prolonged frozen/cropped frames; moving only the crop early also produced bad frames; replacing synchronized resizing with plain applyTransaction still flashed and broke positioning. These experiments are not in the retained backend.
+
+The final APK labels this as `0.6-preview` and distinguishes timed/untimed sessions. Normal `Activate.ps1` starts an untimed session; `Trial.ps1` remains an optional five-minute developer test. The phone was reactivated with the confirmed wallpaper fix and no trial timeout. Its filter was active with zero forwarding errors at verification.
+
+The final APK passed on-device generated-event checks for filtering, missing pointer-up, reused IDs, interruption recovery, failed cancellation, and all four masks. Clean compilation, DEX conversion, APK alignment, signing, and signature verification passed. Rotation blink, comprehensive physical touch calibration, and long-term connection reliability remain unresolved or unverified.
+
+For controlled recordings, fixed-to-user rotation was temporarily enabled and rotations 1 and 0 selected. Every test restored `wm user-rotation free` and `wm fixed-to-user-rotation default`; both values were verified afterward. No photographs or Camera videos were taken. Private screen recordings and dumps remain outside Git. A fixed recording canvas letterboxes the landscape display, so its black-pixel percentage is not a general flash severity score.
+
+The sections below preserve earlier investigation history. This final status supersedes their statements that feedback is pending or the prepared candidate is uninstalled.
+
 ## Latest retry — supersedes the candidate description below
 
 The user made the phone available again. The first retry confirmed a photo without a bottom gap, but Camera's controls were cropped: `OneHanded:0:14` contains BOTH apps and wallpaper, so excluding that parent from app resizing was incorrect.

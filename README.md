@@ -1,85 +1,32 @@
-# Experimental adaptive rotation — not a release
+# Screen Safe 0.6 preview — S23 Ultra
 
-This branch contains an unfinished five-minute trial. The user reported that the wallpaper gap and rotation flash persisted in previous trials. The latest retry has been installed: captures show the wallpaper gap removed and Camera controls fitting in portrait. Physical rotation and touch checks remain pending. See [EXPERIMENT.md](EXPERIMENT.md) for the observed failure, prepared corrections, and next test.
+The lock-screen photograph now fills the usable screen area. **Rotation still produces a harsh blink.** This preview retains the confirmed wallpaper fix while rotation work remains unfinished.
 
-Keep USB connected during testing. `Start Screen Safe.cmd` on this branch starts a five-minute trial; `Restore Screen.cmd` restores full-screen geometry. Controller/forwarding connection loss remains unresolved. Do not rely on this candidate for daily use.
+Tested device: Samsung SM-S918W, Android 16 / One UI 8.5, physical resolution 1440 × 3088. No root is required. The natural top 927 pixels are masked; the interface uses the remaining area. The damaged edge follows rotation.
 
-`main` still holds the previous 0.5 implementation. The historical instructions below describe that version, not the adaptive candidate.
+## Start or restore
 
----
-# Screen Safe 0.5 — S23 Ultra prototype
+Connect the phone by USB with debugging authorized, then run **Start Screen Safe.cmd**. It enables the touch filter and starts the preview without a five-minute timeout. The APK alone cannot activate protection. Reconnect and run the launcher after a phone restart or ended session.
 
-Screen Safe keeps the interface in the bottom 70% of your SM-S918W's screen at full width. Version 0.5 adds interrupted-gesture recovery to early touch filtering to the separate top-30% blocker. **Root is not required.** This portrait-only prototype is for the tested One UI 8.5 / Android 16 phone at 1440 × 3088 resolution.
+Run **Restore Screen.cmd** to stop protection and restore full-screen geometry. The phone app also provides Protect, Restore, and End activated session buttons. If forwarding or restoration fails, reconnect USB and use the computer launcher. A black strip alone does not prove the filter is active.
 
-## Version 0.5: intermittent touch freeze
+`Trial.ps1` starts an optional five-minute developer test that attempts automatic restoration. Normal activation uses `Activate.ps1` and has no trial timer.
 
-This version addresses stale gesture state and a service-reconnection error found while investigating touch freezes that required repeated locking/unlocking. These are plausible causes; the reported freeze has not yet been reproduced on a connected phone.
+## Changes and verification
 
-- Reset gesture state on screen off, screen on, unlock, and accessibility interruption; discard queued input from earlier transitions.
-- Clear state even when injecting a cancellation fails while the dispatcher is unavailable.
-- Recover missing pointer-up events and reused pointer IDs without generating a click from an orphan move.
-- Re-enable event capture when Android reconnects the same accessibility service object during an active session.
-- Include recovery counters in the service dump.
+- Keep Samsung's wallpaper-only child at native dimensions while clipping it inside the smaller app viewport.
+- Update app bounds, guard, and touch mask for each orientation.
+- Avoid redundant guard relayouts and handle rapid queued rotation reversals.
+- Retain the interrupted-gesture and service-reconnection recovery from 0.5.
 
-To update, connect the phone and run **Start Screen Safe.cmd**. It installs the new APK and restarts the authorized session. Test scrolling, keyboard entry, pinch gestures, and repeated lock/unlock transitions before relying on it.
+The user confirmed the lock-screen fix. Camera controls fit in portrait. Host checks, on-device generated-event checks, APK compilation, and signature verification passed. Smooth rotation, full landscape touch calibration, all third-party apps, and long-term reliability remain unverified or unresolved. See [EXPERIMENT.md](EXPERIMENT.md) and [VERIFICATION.md](VERIFICATION.md).
 
-### Development checks
+The app has no network permission and does not save or transmit touch events. Other enabled accessibility services are preserved; touch-exploration services such as TalkBack are not supported concurrently.
 
-Run `python tests/host_checks.py --jdk <JDK-17-folder>`. This compiles the production filter against small Android API fakes and runs gesture and lifecycle regressions. It does not validate Samsung input dispatch or real broadcast timing.
+## Development
 
-For device checks, first restore/end protection; then run `phone-tools\adb.exe shell am instrument -w -r -e test checks ca.screensafe.app/.SessionRunner`. Instrumentation checks replace the active session, so reactivate with the Windows launcher afterward.
+Build `source/build.ps1` with JDK 17, Android platform 36, Build Tools 36, and R8. Host checks: `python tests/host_checks.py --jdk <JDK-folder>`.
 
-To capture a freeze while USB is connected:
+For on-device generated-event checks, end protection first and run `phone-tools\adb.exe shell am instrument -w -r -e test checks ca.screensafe.app/.SessionRunner`, then reactivate. Instrumentation checks replace the active session.
 
-```powershell
-.\phone-tools\adb.exe shell dumpsys activity service ca.screensafe.app/.TouchFilterService
-.\phone-tools\adb.exe logcat -d -s ScreenSafeFilter ScreenSafe
-```
-
-## Previous version findings
-
-The earlier version's controller had stopped, leaving the screen resized but the touch blocker absent. A black strip alone did not mean protection was active. The updated recovery path retains the blocker and touch filter if restoring the layout fails, and lets you retry restoration.
-
-The new accessibility filter consumes physical touchscreen events before normal window and gesture-monitor dispatch. Contacts that begin in the top 927 pixels remain blocked until lifted, even if their reported position jumps below the boundary. Accepted fingers are forwarded separately, so a blocked finger is removed from the usable area's multitouch stream. If an accepted finger enters the strip, its ongoing gesture is cancelled; lift your fingers and start again. Two accepted fingers can still perform multitouch gestures.
-
-The September 19, 2026 live test discarded thousands of blocked contact samples with no forwarding errors. You confirmed scrolling and typing worked and black-strip touches were ignored. This is software filtering; it does not electrically disable the damaged sensor or guarantee removal of noise that first appears below the boundary.
-
-## Use it now
-
-Version 0.5 was rebuilt on October 1, 2026. No phone was connected for this rebuild, so installation and current device behavior have not been verified. After activation, open **Screen Safe** to check for **Touch filter active**.
-
-- **Protect top 30%** starts the resized layout, overlay blocker, and early touch filter after you have restored the full screen.
-- **Restore full screen** returns to the original layout and rotation setting and stops filtering.
-- **End activated session** restores the screen and ends the computer-authorized session.
-- You can disconnect USB after activation. No Internet connection is needed.
-
-The usable area is 1440 × 2161 pixels, beginning at pixel 927. Navigation stays at the bottom. The phone remains upright while protected.
-
-## After a restart or ended session
-
-1. Extract this entire folder on your Windows computer.
-2. Connect the unlocked phone by USB, with USB debugging enabled.
-3. Double-click **Start Screen Safe.cmd**. Accept a USB-debugging prompt if one appears.
-4. The launcher enables protection automatically and checks that the touch filter is active.
-
-The Windows launcher activates the display controller and Screen Safe's accessibility touch filter. It preserves other enabled accessibility services. The touch filter does not request access to window contents; it uses touch coordinates and forwards accepted contacts through the authorized debugging session. Installing the APK alone is insufficient. The filter is inactive after a phone restart until you reactivate protection.
-
-Touch-exploration services such as TalkBack affect Android's touchscreen filtering API and are not supported concurrently by this prototype. Ordinary accessibility services are not suppressed.
-
-## Recovery
-
-If the controller loses contact, it attempts to restore the layout after about eight seconds of awake time. Deep sleep no longer counts toward that timeout. If restoration fails while the app remains alive, the blocker and filter stay active and the app offers a retry. This failure path was tested by terminating the controller while its recovery file was temporarily unavailable, then restoring the file and successfully retrying.
-
-For manual recovery, reconnect USB and double-click **Restore Screen.cmd**. It disables only Screen Safe's accessibility service, stops Screen Safe, and restores the saved layout and rotation. Recovery understands the 10%, 20%, and 30% versions. The screen density and Samsung Tap duration settings are preserved.
-
-If the app itself is stopped or killed, its filter and overlay cannot remain active. A black strip may outlast the process: check Screen Safe's status rather than relying on the strip. Reconnect and run the launcher if activation is needed. Lock-screen behavior, all third-party apps, and long-term reliability remain unverified.
-
-## Contents and implementation
-
-- **ScreenSafe.apk** and **screensafe-backend.dex**: phone app and display controller.
-- **Start Screen Safe.cmd**, **Restore Screen.cmd**, **Activate.ps1**: Windows activation and recovery.
-- **phone-tools/**: Google's Android Debug Bridge and notices.
-- **source/**: Java sources, on-device touch-sequence checks, and build script. Requires JDK 17, Android SDK platform 36, Build Tools 36, and R8.
-- **VERIFICATION.md**: measured results and limitations.
-
-Filtering uses Android's [AccessibilityService.onMotionEvent API](https://developer.android.com/reference/android/accessibilityservice/AccessibilityService#onMotionEvent(android.view.MotionEvent)). Touch events are processed on the phone and not saved or transmitted. This app has no network permission.
+Work is on `wip/adaptive-rotation`; `main` retains the 0.5 baseline. `SHA256SUMS.txt` covers the APK, backend DEX, and bundled ADB binaries.

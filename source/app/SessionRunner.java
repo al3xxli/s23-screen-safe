@@ -96,7 +96,7 @@ public class SessionRunner extends Instrumentation {
                 while((line=reader.readLine())!=null){
                     if(line.equals("APPLIED")){
                         try{mainAction(new Runnable(){public void run(){TouchFilterService.current.enable(automation);updateGuard();}});
-                            status="Experimental layout active\nFive-minute rotation trial";
+                            status=testMode==null?"Protected\nAdaptive layout preview":"Experimental layout active\nFive-minute rotation trial";
                         }catch(Exception e){backendError="Touch filter could not start";stopBackend();}
                     }
                     else if(line.equals("RESTORED"))restored=true;
