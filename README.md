@@ -12,6 +12,16 @@ Run **Restore Screen.cmd** to stop protection and restore full-screen geometry. 
 
 `Trial.ps1` starts an optional five-minute developer test that attempts automatic restoration. Normal activation uses `Activate.ps1` and has no trial timer.
 
+## USB disconnection and screen locking
+
+Keep **Default USB configuration** set to **No data transfer / Charging** while using this preview, with USB debugging enabled. This phone previously defaulted to USB tethering: locking switched it to charging, then unlocking switched it back. Those changes restarted Android's debugging service and killed Screen Safe's controller, leaving the black guard visible while the content shifted upward.
+
+Changing the default to charging fixed the tested unplug, lock/unlock, and reconnect cycle. The same controller and backend processes survived, and the touch filter stayed active with zero forwarding failures. Shell detachment (`nohup setsid`) alone did not fix the USB-mode restart.
+
+The charging default is already applied to the test phone. This disables automatic USB tethering. If you re-enable tethering, change USB mode, disable debugging, or reboot, protection may end; reconnect and run **Start Screen Safe.cmd** after selecting charging again. The wallpaper fix is retained, and rotation blink remains unresolved.
+
+Developer commands for the tested setting are `adb shell svc usb setScreenUnlockedFunctions` and `adb shell svc usb setFunctions`, both without a function argument. Apply them before activation because changing mode may end a running session. The previous default can be restored with `adb shell svc usb setScreenUnlockedFunctions rndis`; this reintroduces the mode-switch risk.
+
 ## Changes and verification
 
 - Keep Samsung's wallpaper-only child at native dimensions while clipping it inside the smaller app viewport.

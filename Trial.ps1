@@ -34,7 +34,7 @@ try {
     if(($taskRecovery -match 'ERROR:|RESTORE_ERROR') -or -not($taskRecovery -match '^RESTORED$')){throw ($taskRecovery -join "`n")}
     if($RestoreOnly){Write-Host 'The full screen is restored. You can disconnect USB.';exit 0}
     Invoke-Phone @('install','-r','--user','0',(Join-Path $PSScriptRoot 'ScreenSafe.apk')) | Out-Null
-    Invoke-Phone @('shell','nohup am instrument -w -r -e protect true -e test adaptive ca.screensafe.app/.SessionRunner > /data/local/tmp/screensafe-session.log 2>&1 < /dev/null &') | Out-Null
+    Invoke-Phone @('shell','nohup setsid am instrument -w -r -e protect true -e test adaptive ca.screensafe.app/.SessionRunner > /data/local/tmp/screensafe-session.log 2>&1 < /dev/null &') | Out-Null
     Start-Sleep -Seconds 3
     # Add only our service, retaining any services the user already has enabled.
     $taskServices=(Invoke-Phone @('shell','settings','get','secure','enabled_accessibility_services') -join '').Trim()
