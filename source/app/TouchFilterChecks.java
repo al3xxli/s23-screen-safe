@@ -39,6 +39,25 @@ final class TouchFilterChecks {
         f=fresh();event(f,0,new int[]{0},1000);event(f,2,new int[]{0},900);event(f,2,new int[]{0},1200);event(f,1,new int[]{0},1200);actions(0,3);
         f=fresh();event(f,0,new int[]{0},926.99f);event(f,1,new int[]{0},926.99f);actions();
         event(f,0,new int[]{0},927);event(f,1,new int[]{0},927);actions(0,1);
-        fresh();return "PASS: blocked-origin jump, ghost-first and real-first multitouch, two real fingers, boundary crossing cancellation, exact boundary.";
+        // Lost ghost UP followed by reuse of its pointer ID must not poison new fingers.
+        f=fresh();event(f,0,new int[]{0},100);event(f,5|(1<<8),new int[]{0,7},100,1700);
+        event(f,2,new int[]{7},1750);event(f,5|(1<<8),new int[]{7,0},1750,1800);
+        event(f,6|(1<<8),new int[]{7,0},1750,1800);event(f,1,new int[]{7},1750);
+        actions(0,2,5,6,1);
+        // Lost accepted UP cancels the old stream. A subsequent fresh DOWN recovers.
+        f=fresh();event(f,0,new int[]{0},1500);event(f,5|(1<<8),new int[]{0,2},1500,1800);
+        event(f,2,new int[]{2},1850);event(f,1,new int[]{2},1850);
+        event(f,0,new int[]{2},1850);event(f,1,new int[]{2},1850);actions(0,5,3,0,1);
+        // Lock/interruption cleanup must not permit an orphan MOVE to create a click.
+        f=fresh();event(f,0,new int[]{0},1500);f.clearStream();
+        event(f,2,new int[]{0},1600);event(f,1,new int[]{0},1600);
+        event(f,0,new int[]{0},1700);event(f,1,new int[]{0},1700);actions(0,3,0,1);
+        // Failure to inject CANCEL must still clear blocked and accepted state.
+        f=fresh();event(f,0,new int[]{0},1500);
+        f.testSink=new TouchFilterService.EventSink(){public void send(MotionEvent e){throw new IllegalStateException("Locked dispatcher");}};
+        f.clearStream();require(f.failures==1,"Cancellation failure was not recorded");
+        f.testSink=new TouchFilterService.EventSink(){public void send(MotionEvent e){sent.add(MotionEvent.obtain(e));}};
+        event(f,0,new int[]{0},1600);event(f,1,new int[]{0},1600);actions(0,0,1);
+        fresh();return "PASS: original filtering checks plus lost pointer UP, reused pointer ID, interrupted stream, and failed cancellation recovery.";
     }
 }

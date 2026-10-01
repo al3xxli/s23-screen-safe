@@ -1,8 +1,33 @@
-# Screen Safe 0.4 — S23 Ultra prototype
+# Screen Safe 0.5 — S23 Ultra prototype
 
-Screen Safe keeps the interface in the bottom 70% of your SM-S918W's screen at full width. Version 0.4 adds early touch filtering to the separate top-30% blocker. **Root is not required.** This portrait-only prototype is for the tested One UI 8.5 / Android 16 phone at 1440 × 3088 resolution.
+Screen Safe keeps the interface in the bottom 70% of your SM-S918W's screen at full width. Version 0.5 adds interrupted-gesture recovery to early touch filtering to the separate top-30% blocker. **Root is not required.** This portrait-only prototype is for the tested One UI 8.5 / Android 16 phone at 1440 × 3088 resolution.
 
-## What changed
+## Version 0.5: intermittent touch freeze
+
+This version addresses stale gesture state and a service-reconnection error found while investigating touch freezes that required repeated locking/unlocking. These are plausible causes; the reported freeze has not yet been reproduced on a connected phone.
+
+- Reset gesture state on screen off, screen on, unlock, and accessibility interruption; discard queued input from earlier transitions.
+- Clear state even when injecting a cancellation fails while the dispatcher is unavailable.
+- Recover missing pointer-up events and reused pointer IDs without generating a click from an orphan move.
+- Re-enable event capture when Android reconnects the same accessibility service object during an active session.
+- Include recovery counters in the service dump.
+
+To update, connect the phone and run **Start Screen Safe.cmd**. It installs the new APK and restarts the authorized session. Test scrolling, keyboard entry, pinch gestures, and repeated lock/unlock transitions before relying on it.
+
+### Development checks
+
+Run `python tests/host_checks.py --jdk <JDK-17-folder>`. This compiles the production filter against small Android API fakes and runs gesture and lifecycle regressions. It does not validate Samsung input dispatch or real broadcast timing.
+
+For device checks, first restore/end protection; then run `phone-tools\adb.exe shell am instrument -w -r -e test checks ca.screensafe.app/.SessionRunner`. Instrumentation checks replace the active session, so reactivate with the Windows launcher afterward.
+
+To capture a freeze while USB is connected:
+
+```powershell
+.\phone-tools\adb.exe shell dumpsys activity service ca.screensafe.app/.TouchFilterService
+.\phone-tools\adb.exe logcat -d -s ScreenSafeFilter ScreenSafe
+```
+
+## Previous version findings
 
 The earlier version's controller had stopped, leaving the screen resized but the touch blocker absent. A black strip alone did not mean protection was active. The updated recovery path retains the blocker and touch filter if restoring the layout fails, and lets you retry restoration.
 
@@ -12,7 +37,7 @@ The September 19, 2026 live test discarded thousands of blocked contact samples 
 
 ## Use it now
 
-This package was recovered and rebuilt on October 1, 2026. No phone was connected for this rebuild, so installation and current device behavior have not been verified. After activation, open **Screen Safe** to check for **Touch filter active**.
+Version 0.5 was rebuilt on October 1, 2026. No phone was connected for this rebuild, so installation and current device behavior have not been verified. After activation, open **Screen Safe** to check for **Touch filter active**.
 
 - **Protect top 30%** starts the resized layout, overlay blocker, and early touch filter after you have restored the full screen.
 - **Restore full screen** returns to the original layout and rotation setting and stops filtering.
@@ -49,4 +74,3 @@ If the app itself is stopped or killed, its filter and overlay cannot remain act
 - **VERIFICATION.md**: measured results and limitations.
 
 Filtering uses Android's [AccessibilityService.onMotionEvent API](https://developer.android.com/reference/android/accessibilityservice/AccessibilityService#onMotionEvent(android.view.MotionEvent)). Touch events are processed on the phone and not saved or transmitted. This app has no network permission.
-

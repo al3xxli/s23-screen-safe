@@ -3,9 +3,12 @@ package ca.screensafe.app;
 import android.accessibilityservice.AccessibilityService;
 import android.accessibilityservice.AccessibilityServiceInfo;
 import android.app.UiAutomation;
+import android.content.BroadcastReceiver;
+import android.content.Context;
+import android.content.Intent;
+import android.content.IntentFilter;
 import android.os.Handler;
 import android.os.HandlerThread;
-import android.os.SystemClock;
 import android.view.InputDevice;
 import android.view.MotionEvent;
 import android.view.accessibility.AccessibilityEvent;
@@ -25,14 +28,34 @@ public final class TouchFilterService extends AccessibilityService {
     private long downTime;
     private MotionEvent last;
     private static final int TOP=927;
+    private volatile int generation;
+    public volatile long recoveries;
+    private boolean receiving;
+    private final BroadcastReceiver screenState=new BroadcastReceiver(){
+        public void onReceive(Context context,Intent intent){
+            // Android can end input dispatch without delivering the final UP/CANCEL.
+            if(filtering)restartStream();
+        }
+    };
     interface EventSink {void send(MotionEvent e);}
     EventSink testSink;
 
     protected void onServiceConnected(){
-        thread=new HandlerThread("Screen Safe touch filter");thread.start();worker=new Handler(thread.getLooper());
+        if(thread==null){thread=new HandlerThread("Screen Safe touch filter");thread.start();worker=new Handler(thread.getLooper());}
+        // The framework can reconnect the same service object. Reinitialize its capture
+        // state instead of leaving filtering=true while motion sources are disabled.
+        filtering=false;generation++;
+        worker.post(new Runnable(){public void run(){clearStream();injector=null;}});
         current=this;
+        IntentFilter screen=new IntentFilter();
+        screen.addAction(Intent.ACTION_SCREEN_OFF);screen.addAction(Intent.ACTION_SCREEN_ON);
+        screen.addAction(Intent.ACTION_USER_PRESENT);
+        if(!receiving){registerReceiver(screenState,screen,Context.RECEIVER_NOT_EXPORTED);receiving=true;}
         configure(false);
-        if(SessionRunner.current!=null&&SessionRunner.current.autoStart)SessionRunner.current.request("START");
+        SessionRunner session=SessionRunner.current;
+        if(session!=null&&session.busy&&session.automation!=null){
+            enable(session.automation);
+        }else if(session!=null&&session.autoStart)session.request("START");
     }
     private void configure(boolean enabled){
         AccessibilityServiceInfo info=getServiceInfo();
@@ -42,22 +65,35 @@ public final class TouchFilterService extends AccessibilityService {
     // Called on the application's main thread, with injection already available.
     public void enable(UiAutomation automation){
         if(filtering)return;
-        injector=automation;blocked=forwarded=failures=0;
-        worker.post(new Runnable(){public void run(){reset();}});
+        generation++;
+        worker.post(new Runnable(){public void run(){reset();injector=automation;}});
+        blocked=forwarded=failures=recoveries=0;
         filtering=true;configure(true);
     }
     public void disable(){
         if(!filtering)return;
-        filtering=false;configure(false);
-        worker.post(new Runnable(){public void run(){cancel();reset();injector=null;}});
+        filtering=false;generation++;configure(false);
+        worker.post(new Runnable(){public void run(){try{clearStream();}finally{injector=null;}}});
+    }
+    private void restartStream(){
+        generation++;
+        worker.post(new Runnable(){public void run(){clearStream();}});
+    }
+    // Cleanup must succeed even when injection is unavailable (for example while locked).
+    void clearStream(){
+        try{cancel();}catch(RuntimeException error){
+            failures++;android.util.Log.w("ScreenSafeFilter","Could not cancel interrupted gesture",error);
+        }finally{reset();recoveries++;}
     }
     public void onMotionEvent(MotionEvent event){
         if(!filtering)return;
         final MotionEvent copy=MotionEvent.obtain(event);
+        final int epoch=generation;
         worker.post(new Runnable(){public void run(){
-            try{if(filtering)filter(copy);}catch(Throwable error){
+            try{if(filtering&&epoch==generation)filter(copy);}catch(Throwable error){
                 failures++;android.util.Log.e("ScreenSafeFilter","Touch forwarding failed",error);
-                new Handler(getMainLooper()).post(new Runnable(){public void run(){disable();
+                clearStream();
+                new Handler(getMainLooper()).post(new Runnable(){public void run(){if(epoch!=generation)return;disable();
                     if(SessionRunner.current!=null)SessionRunner.current.status="Touch filter stopped. Top overlay still protects the strip.";
                 }});
             }finally{copy.recycle();}
@@ -70,15 +106,32 @@ public final class TouchFilterService extends AccessibilityService {
     }
     void filter(MotionEvent e){
         int action=e.getActionMasked(), index=e.getActionIndex();
-        if(action==MotionEvent.ACTION_DOWN){cancel();reset();}
-        if(action==MotionEvent.ACTION_CANCEL){cancel();reset();return;}
+        if(action==MotionEvent.ACTION_DOWN){try{cancel();}finally{reset();}}
+        if(action==MotionEvent.ACTION_CANCEL){try{cancel();}finally{reset();}return;}
         if(action!=MotionEvent.ACTION_DOWN && action!=MotionEvent.ACTION_POINTER_DOWN &&
            action!=MotionEvent.ACTION_MOVE && action!=MotionEvent.ACTION_UP && action!=MotionEvent.ACTION_POINTER_UP)return;
+        HashSet<Integer> present=new HashSet<>();
+        for(int i=0;i<e.getPointerCount();i++)present.add(e.getPointerId(i));
+        // Recover a missing POINTER_UP without emitting an invalid multitouch stream.
+        if(!present.containsAll(allowed)){
+            clearStream();
+            // Existing contacts need a fresh DOWN; do not synthesize a click from MOVE.
+            rejected.addAll(present);
+        }
+        rejected.retainAll(present);
+        if(action==MotionEvent.ACTION_DOWN||action==MotionEvent.ACTION_POINTER_DOWN){
+            int id=e.getPointerId(index);
+            // A DOWN is authoritative: this ID may belong to a new contact after a lost UP.
+            if(allowed.contains(id)){
+                clearStream();rejected.addAll(present);
+            }
+            rejected.remove(id);
+        }
         // Never allow a contact that began in the strip to become a usable-area touch.
         // If an accepted contact enters the strip, cancel its current gesture, never click it.
         boolean crossing=false;
         for(int i=0;i<e.getPointerCount();i++)if(allowed.contains(e.getPointerId(i))&&unsafe(e,i))crossing=true;
-        if(crossing){cancel();rejected.addAll(allowed);allowed.clear();}
+        if(crossing){try{cancel();}finally{rejected.addAll(allowed);allowed.clear();if(last!=null){last.recycle();last=null;}}}
         if(action==MotionEvent.ACTION_DOWN||action==MotionEvent.ACTION_POINTER_DOWN){
             int id=e.getPointerId(index);
             if(unsafe(e,index)){rejected.add(id);blocked++;}
@@ -126,9 +179,9 @@ public final class TouchFilterService extends AccessibilityService {
     }
     private void reset(){allowed.clear();rejected.clear();if(last!=null){last.recycle();last=null;}downTime=0;}
     public void onAccessibilityEvent(AccessibilityEvent event){}
-    public void onInterrupt(){}
+    public void onInterrupt(){if(filtering)restartStream();}
     protected void dump(java.io.FileDescriptor fd,java.io.PrintWriter out,String[] args){
-        out.println("ScreenSafe touch filter: active="+filtering+" blockedSamples="+blocked+" forwardedEvents="+forwarded+" failures="+failures);
+        out.println("ScreenSafe touch filter: active="+filtering+" blockedSamples="+blocked+" forwardedEvents="+forwarded+" failures="+failures+" recoveries="+recoveries+" generation="+generation);
     }
-    public void onDestroy(){disable();current=null;if(thread!=null)thread.quitSafely();super.onDestroy();}
+    public void onDestroy(){if(receiving){unregisterReceiver(screenState);receiving=false;}disable();current=null;if(thread!=null)thread.quitSafely();super.onDestroy();}
 }

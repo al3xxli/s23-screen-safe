@@ -1,3 +1,12 @@
+# Version 0.5 verification — October 1, 2026
+
+- Production app and backend compiled against Android API 36; APK signature verified.
+- Desktop regression checks passed using the actual TouchFilterService.java and TouchFilterChecks.java with Android API fakes. Covered original filtering behavior, lost pointer-up events, pointer-ID reuse, interrupted-stream recovery, failed cancellation, queued pre-lock input, service reconnect, and disable/enable ordering.
+- No phone connected over ADB. Device instrumentation checks, freeze reproduction, keyboard behavior, real lock/unlock transitions, S Pen, and prolonged operation have not been tested for version 0.5.
+- Changes address confirmed code-state defects; the cause of the user's intermittent freeze remains unconfirmed.
+
+## Historical version 0.4 evidence
+
 # Current rebuild — October 1, 2026
 
 Recovered source compiled to APK and backend DEX; APK signature verification passed. ADB reported no connected devices. All device results below are historical and were not repeated in this workspace.
@@ -36,4 +45,3 @@ The filter's system service must be rebound after an instrumentation process res
 This is software event filtering, not sensor/driver region shutdown. Touchscreen events still exist in the hardware and early OS input stages; they are discarded before window/gesture-monitor dispatch. A faulty contact whose first reported coordinate is below pixel 927 cannot be identified as originating in the damaged strip. Input injection into protected coordinates bypasses the early physical-input filter and is instead caught by the overlay.
 
 Cancellation when an accepted finger enters the strip cancels the current accepted gesture, including other accepted fingers in that gesture; it avoids accidental clicks. Lift and restart. Touch exploration, additional displays, landscape, long-term reliability, lock screens, and every app's treatment of injected events remain unverified or unsupported. Process death removes the filter and overlay; the app cannot promise permanent protection after it is killed. Root and bootloader changes were not used.
-
