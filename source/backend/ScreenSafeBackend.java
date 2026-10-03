@@ -13,7 +13,7 @@ public final class ScreenSafeBackend {
     static Class<?> organizerType, wctType, surfaceType, surfaceTxType, rectType, tokenType;
     static Object organizer;
     static final List<Object> surfaces = new ArrayList<>(), tokens = new ArrayList<>();
-    static Object wallpaperToken,wallpaperSurface;
+    static Object wallpaperToken,wallpaperSurface,shadeToken;
     static boolean registered, restored, rotationChanged;
     static String originalRotation;
     static volatile boolean stop;
@@ -21,6 +21,7 @@ public final class ScreenSafeBackend {
     static final File stateFile=new File("/data/local/tmp/screensafe-rotation-state");
     static boolean ownsState;
     static int appliedRotation=-1, appliedDensity=-1;
+    static android.graphics.Rect appliedShadeInsets;
     static Object displayManager;
     static void position(Object st,SafeArea area)throws Exception{
         for(Object s:surfaces){
@@ -52,7 +53,9 @@ public final class ScreenSafeBackend {
         SafeArea snapshot=new SafeArea(rotation);
         if(info.getClass().getField("logicalWidth").getInt(info)!=snapshot.displayWidth
                 ||info.getClass().getField("logicalHeight").getInt(info)!=snapshot.displayHeight)return;
-        if(rotation==appliedRotation&&density==appliedDensity)return;
+        android.graphics.Rect shadeInsets=ShadeInsets.read(snapshot);
+        if(shadeInsets==null)return;
+        if(rotation==appliedRotation&&density==appliedDensity&&shadeInsets.equals(appliedShadeInsets))return;
         final SafeArea area=new SafeArea(rotation);
         // Android and SurfaceFlinger must agree on the viewport origin. Local (0,0)
         // configuration plus an independent surface offset loses native bar insets
@@ -71,15 +74,21 @@ public final class ScreenSafeBackend {
                 call(tx,"setScreenSizeDp",new Class<?>[]{tokenType,int.class,int.class},token,area.displayWidth*160/density,area.displayHeight*160/density);
                 continue;
             }
-            call(tx,"setBounds",new Class<?>[]{tokenType,rectType},token,bounds);
+            // Samsung's notification stack clips its cards when its configuration
+            // has a nonzero origin. Only this area uses local coordinates; mirror
+            // its native navigation frame locally so the footer still fits.
+            Object windowBounds=token==shadeToken
+                    ?rectType.getConstructor(int.class,int.class,int.class,int.class).newInstance(0,0,area.width(),area.height()):bounds;
+            call(tx,"setBounds",new Class<?>[]{tokenType,rectType},token,windowBounds);
             call(tx,"setAppBounds",new Class<?>[]{tokenType,rectType},token,null);
             call(tx,"setScreenSizeDp",new Class<?>[]{tokenType,int.class,int.class},token,area.width()*160/density,area.height()*160/density);
             call(tx,"setSmallestScreenWidthDp",new Class<?>[]{tokenType,int.class},token,WIDTH*160/density);
         }
+        ShadeInsets.apply(tx,shadeToken,shadeInsets);
         // A sync covering all display areas can wait for a hidden status bar to
         // redraw, blocking subsequent rotations until BLAST's five-second timeout.
         call(organizer,"applyTransaction",new Class<?>[]{wctType},tx);
-        appliedRotation=rotation;appliedDensity=density;
+        appliedRotation=rotation;appliedDensity=density;appliedShadeInsets=shadeInsets;
         maintainPosition();
         System.out.println("LAYOUT "+area.rotation+" "+area.left+" "+area.top+" "+area.width()+" "+area.height());System.out.flush();
     }
@@ -105,6 +114,7 @@ public final class ScreenSafeBackend {
         try {
             if(!tokens.isEmpty()) {
                 Object tx=wctType.getConstructor().newInstance();
+                if(shadeToken!=null)ShadeInsets.remove(tx,shadeToken);
                 for(Object token:tokens){
                     call(tx,"setBounds",new Class<?>[]{tokenType,rectType},token,rectType.getConstructor().newInstance());
                     call(tx,"setAppBounds",new Class<?>[]{tokenType,rectType},token,null);
@@ -195,8 +205,13 @@ public final class ScreenSafeBackend {
                 Object token=info.getClass().getField("token").get(info);
                 Object leash=call(area,"getLeash",new Class<?>[]{});
                 tokens.add(token);surfaces.add(leash);
+                if(leash.toString().contains("OneHanded:17:17")){
+                    if(shadeToken!=null)throw new IllegalStateException("Duplicate Samsung notification area.");
+                    shadeToken=token;
+                }
             }
             if(tokens.size()!=8) throw new IllegalStateException("Unexpected number of display areas.");
+            if(shadeToken==null)throw new IllegalStateException("Unrecognized Samsung notification area.");
             List<?> wallpaperAreas=(List<?>)call(organizer,"registerOrganizer",new Class<?>[]{int.class},10002);
             for(Object area:wallpaperAreas){
                 Object info=call(area,"getDisplayAreaInfo",new Class<?>[]{});

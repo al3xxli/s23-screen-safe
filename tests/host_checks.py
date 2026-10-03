@@ -13,17 +13,19 @@ stubs = {
 'android/content/Intent.java': '''package android.content; public class Intent {public static final String ACTION_SCREEN_OFF="OFF",ACTION_SCREEN_ON="ON",ACTION_USER_PRESENT="UNLOCK";}''',
 'android/content/IntentFilter.java': '''package android.content; public class IntentFilter {public void addAction(String s){}}''',
 'android/os/Looper.java': '''package android.os; public class Looper {}''',
+'android/os/SystemClock.java': '''package android.os; public class SystemClock {public static long now=10000; public static long uptimeMillis(){return now;}}''',
 'android/os/Handler.java': '''package android.os; import java.util.ArrayDeque; public class Handler {public static final ArrayDeque<Runnable> queue=new ArrayDeque<>(); public Handler(Looper l){} public boolean post(Runnable r){queue.add(r);return true;} public static void drain(){while(!queue.isEmpty())queue.remove().run();}}''',
 'android/os/HandlerThread.java': '''package android.os; public class HandlerThread {public HandlerThread(String s){} public void start(){} public Looper getLooper(){return new Looper();} public void quitSafely(){}}''',
 'android/accessibilityservice/AccessibilityServiceInfo.java': '''package android.accessibilityservice; public class AccessibilityServiceInfo {public int sources; public void setMotionEventSources(int s){sources=s;}}''',
 'android/accessibilityservice/AccessibilityService.java': '''package android.accessibilityservice; public class AccessibilityService extends android.content.Context {private AccessibilityServiceInfo info=new AccessibilityServiceInfo(); public AccessibilityServiceInfo getServiceInfo(){return info;} public void setServiceInfo(AccessibilityServiceInfo i){info=i;} public android.os.Looper getMainLooper(){return new android.os.Looper();} public void onDestroy(){}}''',
 'android/view/accessibility/AccessibilityEvent.java': '''package android.view.accessibility; public class AccessibilityEvent {}''',
 'android/view/InputDevice.java': '''package android.view; public class InputDevice {public static final int SOURCE_TOUCHSCREEN=4098;}''',
-'android/app/UiAutomation.java': '''package android.app; public class UiAutomation {public boolean injectInputEvent(android.view.MotionEvent e,boolean sync){return true;}}''',
+'android/app/UiAutomation.java': '''package android.app; public class UiAutomation {public int injected; public boolean injectInputEvent(android.view.InputEvent e,boolean sync){throw new AssertionError("Two-argument injection waits for animation");} public boolean injectInputEvent(android.view.InputEvent e,boolean sync,boolean waitForAnimations){if(sync||waitForAnimations)throw new AssertionError("Live forwarding must not wait for animation/dispatch");injected++;return true;}}''',
 'android/util/Log.java': '''package android.util; public class Log {public static int e(String t,String m,Throwable e){return 0;} public static int w(String t,String m,Throwable e){return 0;}}''',
 'ca/screensafe/app/SessionRunner.java': '''package ca.screensafe.app; public class SessionRunner {public static SessionRunner current; public boolean autoStart,busy; public android.app.UiAutomation automation; public String status; public void request(String s){}}''',
+'android/view/InputEvent.java': '''package android.view; public class InputEvent {}''',
 'android/view/MotionEvent.java': '''package android.view;
-public class MotionEvent {
+public class MotionEvent extends InputEvent {
  public static final int ACTION_DOWN=0,ACTION_UP=1,ACTION_MOVE=2,ACTION_CANCEL=3,ACTION_POINTER_DOWN=5,ACTION_POINTER_UP=6,TOOL_TYPE_FINGER=1;
  public static class PointerProperties {public int id,toolType;}
  public static class PointerCoords {public float x,y,pressure,size;}
@@ -46,7 +48,7 @@ public class MotionEvent {
 'ca/screensafe/app/HostChecks.java': '''package ca.screensafe.app;
 import android.os.Handler;import android.view.MotionEvent;import android.view.InputDevice;
 public class HostChecks {
- static MotionEvent down(){MotionEvent.PointerProperties p=new MotionEvent.PointerProperties();p.id=0;MotionEvent.PointerCoords c=new MotionEvent.PointerCoords();c.y=1500;return MotionEvent.obtain(1,1,0,1,new MotionEvent.PointerProperties[]{p},new MotionEvent.PointerCoords[]{c},0,0,1,1,0,0,InputDevice.SOURCE_TOUCHSCREEN,0);}
+ static MotionEvent down(){MotionEvent.PointerProperties p=new MotionEvent.PointerProperties();p.id=0;MotionEvent.PointerCoords c=new MotionEvent.PointerCoords();c.y=1500;return MotionEvent.obtain(1,android.os.SystemClock.uptimeMillis(),0,1,new MotionEvent.PointerProperties[]{p},new MotionEvent.PointerCoords[]{c},0,0,1,1,0,0,InputDevice.SOURCE_TOUCHSCREEN,0);}
  public static void main(String[] args){
   System.out.println(TouchFilterChecks.run());
   SessionRunner.current=new SessionRunner();SessionRunner.current.busy=true;SessionRunner.current.automation=new android.app.UiAutomation();
@@ -76,7 +78,21 @@ public class HostChecks {
   }
   System.out.println("PASS: all four rotations preserve usable area and physical mask.");
   System.out.println("PASS: 20% boundary, unmodified forwarded coordinates, and batched unsafe samples.");
-
+  // Exercise production reflection/flags, not the test sink, including cancellation.
+  f.disable();Handler.drain();
+  f=new TouchFilterService();f.onServiceConnected();Handler.drain();
+  f.onMotionEvent(down());Handler.drain();f.onInterrupt();Handler.drain();
+  TouchFilterChecks.require(SessionRunner.current.automation.injected==2,"Non-waiting injection did not forward DOWN and CANCEL");
+  System.out.println("PASS: production injector bypasses animation waits for both normal events and cancellation.");
+  f.disable();Handler.drain();
+  f=TouchFilterChecks.fresh();f.onServiceConnected();Handler.drain();
+  f.onMotionEvent(down());Handler.drain();
+  MotionEvent old=down();old.setAction(MotionEvent.ACTION_UP);f.onMotionEvent(old);
+  android.os.SystemClock.now+=600;Handler.drain();TouchFilterChecks.actions(0,3);
+  TouchFilterChecks.require(f.staleEvents==1,"Queued old UP replayed as a click");
+  MotionEvent orphan=down();orphan.setAction(MotionEvent.ACTION_MOVE);f.onMotionEvent(orphan);Handler.drain();TouchFilterChecks.actions(0,3);
+  f.onMotionEvent(down());Handler.drain();TouchFilterChecks.actions(0,3,0);
+  System.out.println("PASS: queued stall cancels stale UP, ignores orphan MOVE, and accepts the next fresh DOWN.");
  }
 }'''
 }

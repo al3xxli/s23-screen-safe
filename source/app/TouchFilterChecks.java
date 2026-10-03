@@ -1,6 +1,7 @@
 package ca.screensafe.app;
 import android.view.MotionEvent;
 import android.view.InputDevice;
+import android.os.SystemClock;
 import java.util.ArrayList;
 
 /** Runs on-device without injecting any input into the phone. */
@@ -30,6 +31,12 @@ final class TouchFilterChecks {
     }
     static void actions(int... expected){require(sent.size()==expected.length,"Event count "+sent.size()+" expected "+expected.length);
         for(int i=0;i<expected.length;i++)require(sent.get(i).getActionMasked()==expected[i],"Unexpected action at "+i);}
+    static void currentPoint(TouchFilterService f,int action,long when,float x,float y){
+        MotionEvent.PointerProperties p=new MotionEvent.PointerProperties();p.id=0;p.toolType=MotionEvent.TOOL_TYPE_FINGER;
+        MotionEvent.PointerCoords c=new MotionEvent.PointerCoords();c.x=x;c.y=y;c.pressure=1;
+        MotionEvent e=MotionEvent.obtain(1000,when,action,1,new MotionEvent.PointerProperties[]{p},new MotionEvent.PointerCoords[]{c},0,0,1,1,6,0,InputDevice.SOURCE_TOUCHSCREEN,0);
+        try{f.filterCurrent(e);}finally{e.recycle();}
+    }
     static String run(){
         TouchFilterService f=fresh();
         event(f,0,new int[]{0},100);event(f,2,new int[]{0},1800);event(f,1,new int[]{0},1800);actions();
@@ -83,6 +90,20 @@ final class TouchFilterChecks {
             point(f,0,goodX,goodY);point(f,1,goodX,goodY);actions(0,1);
             point(f,0,goodX,goodY);point(f,2,badX,badY);point(f,1,goodX,goodY);actions(0,1,0,3);
         }
-        fresh();return "PASS: filtering, lost pointer UP, reused IDs, interruption recovery, failed cancellation, and mask filtering in all four rotations.";
+        // A delayed tap must never replay after a worker/system stall.
+        f=fresh();long stale=SystemClock.uptimeMillis()-TouchFilterService.MAX_EVENT_AGE_MS-100;
+        currentPoint(f,0,stale,700,1500);currentPoint(f,1,stale,700,1500);actions();
+        require(f.staleEvents==2,"Old input was not discarded");
+        // An old UP must cancel an already accepted contact, not finish a click.
+        f=fresh();point(f,0,700,1500);long cancelledAt=SystemClock.uptimeMillis();
+        currentPoint(f,1,stale,700,1500);actions(0,3);
+        require(sent.get(1).getEventTime()>=cancelledAt,"Cancellation retained a stale timestamp");
+        currentPoint(f,2,SystemClock.uptimeMillis(),700,1600);currentPoint(f,1,SystemClock.uptimeMillis(),700,1600);actions(0,3);
+        currentPoint(f,0,SystemClock.uptimeMillis(),700,1700);currentPoint(f,1,SystemClock.uptimeMillis(),700,1700);actions(0,3,0,1);
+        // A long-held gesture is healthy when its individual samples are current.
+        f=fresh();currentPoint(f,0,SystemClock.uptimeMillis(),700,1500);
+        currentPoint(f,2,SystemClock.uptimeMillis(),700,1800);currentPoint(f,1,SystemClock.uptimeMillis(),700,1800);actions(0,2,1);
+        require(f.staleEvents==0,"Gesture downTime incorrectly treated as event age");
+        fresh();return "PASS: filtering, pointer recovery, lifecycle cancellation, all four rotations, stale-input rejection, and fresh touch recovery.";
     }
 }

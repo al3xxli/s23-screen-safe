@@ -9,11 +9,16 @@ import android.content.Intent;
 import android.content.IntentFilter;
 import android.os.Handler;
 import android.os.HandlerThread;
+import android.os.SystemClock;
 import android.view.InputDevice;
+import android.view.InputEvent;
 import android.view.MotionEvent;
 import android.view.accessibility.AccessibilityEvent;
 import java.util.ArrayList;
 import java.util.HashSet;
+import java.lang.reflect.Method;
+import java.lang.reflect.InvocationTargetException;
+import java.util.concurrent.atomic.AtomicInteger;
 import ca.screensafe.core.SafeArea;
 
 /** Consumes physical touchscreen events before window and gesture-monitor dispatch. */
@@ -22,6 +27,7 @@ public final class TouchFilterService extends AccessibilityService {
     private HandlerThread thread;
     private Handler worker;
     private volatile UiAutomation injector;
+    private Method injectWithoutAnimationWait;
     public volatile boolean filtering;
     public volatile long blocked, forwarded, failures;
     private final HashSet<Integer> allowed=new HashSet<>();
@@ -32,6 +38,10 @@ public final class TouchFilterService extends AccessibilityService {
     private int requestedRotation;
     private volatile int generation;
     public volatile long recoveries;
+    // Old input must never replay as a delayed click after a system/worker stall.
+    static final long MAX_EVENT_AGE_MS=500;
+    private final AtomicInteger queued=new AtomicInteger();
+    public volatile long staleEvents,maxQueueDelayMs,maxInjectionMs;
     private boolean receiving;
     private final BroadcastReceiver screenState=new BroadcastReceiver(){
         public void onReceive(Context context,Intent intent){
@@ -56,7 +66,11 @@ public final class TouchFilterService extends AccessibilityService {
         configure(false);
         SessionRunner session=SessionRunner.current;
         if(session!=null&&session.busy&&session.automation!=null){
-            enable(session.automation);
+            try{enable(session.automation);}catch(RuntimeException error){
+                session.status="Touch filter could not start. Restoring the screen.";
+                android.util.Log.e("ScreenSafeFilter","Could not prepare touch injection",error);
+                session.request("STOP");
+            }
         }else if(session!=null&&session.autoStart)session.request("START");
     }
     private void configure(boolean enabled){
@@ -67,9 +81,16 @@ public final class TouchFilterService extends AccessibilityService {
     // Called on the application's main thread, with injection already available.
     public void enable(UiAutomation automation){
         if(filtering)return;
+        // The public two-argument overload waits for all window animations even
+        // with sync=false. Resolve the non-waiting overload before capturing input.
+        // The ADB launcher enables hidden API access for this instrumentation only.
+        final Method nonWaiting;
+        try{nonWaiting=UiAutomation.class.getMethod("injectInputEvent",InputEvent.class,boolean.class,boolean.class);}
+        catch(ReflectiveOperationException error){throw new IllegalStateException("Restart Screen Safe using its updated computer launcher",error);}
         generation++;
-        worker.post(new Runnable(){public void run(){reset();injector=automation;}});
+        worker.post(new Runnable(){public void run(){reset();injector=automation;injectWithoutAnimationWait=nonWaiting;}});
         blocked=forwarded=failures=recoveries=0;
+        staleEvents=maxQueueDelayMs=maxInjectionMs=0;
         filtering=true;configure(true);
     }
     public void disable(){
@@ -101,15 +122,28 @@ public final class TouchFilterService extends AccessibilityService {
         if(!filtering)return;
         final MotionEvent copy=MotionEvent.obtain(event);
         final int epoch=generation;
-        worker.post(new Runnable(){public void run(){
-            try{if(filtering&&epoch==generation)filter(copy);}catch(Throwable error){
+        queued.incrementAndGet();
+        boolean posted=worker.post(new Runnable(){public void run(){
+            try{if(filtering&&epoch==generation)filterCurrent(copy);}catch(Throwable error){
                 failures++;android.util.Log.e("ScreenSafeFilter","Touch forwarding failed",error);
                 clearStream();
                 new Handler(getMainLooper()).post(new Runnable(){public void run(){if(epoch!=generation)return;disable();
                     if(SessionRunner.current!=null)SessionRunner.current.status="Touch filter stopped. Top overlay still protects the strip.";
                 }});
-            }finally{copy.recycle();}
+            }finally{copy.recycle();queued.decrementAndGet();}
         }});
+        if(!posted){copy.recycle();queued.decrementAndGet();}
+    }
+    void filterCurrent(MotionEvent e){
+        long age=Math.max(0,SystemClock.uptimeMillis()-e.getEventTime());
+        maxQueueDelayMs=Math.max(maxQueueDelayMs,age);
+        if(age>MAX_EVENT_AGE_MS){
+            staleEvents++;
+            clearStream();
+            // Only a subsequent fresh DOWN/POINTER_DOWN can admit a contact.
+            return;
+        }
+        filter(e);
     }
     private boolean unsafe(MotionEvent e,int i){
         if(!area.contains(e.getX(i),e.getY(i)))return true;
@@ -180,12 +214,29 @@ public final class TouchFilterService extends AccessibilityService {
     private void inject(MotionEvent e){
         if(testSink!=null){testSink.send(e);return;}
         UiAutomation target=injector;
-        if(target==null||!target.injectInputEvent(e,false))throw new IllegalStateException("Touch injection unavailable");
+        if(target==null||injectWithoutAnimationWait==null)throw new IllegalStateException("Touch injection unavailable");
+        long started=SystemClock.uptimeMillis();
+        try{
+            if(!Boolean.TRUE.equals(injectWithoutAnimationWait.invoke(target,e,false,false)))throw new IllegalStateException("Touch injection unavailable");
+        }catch(InvocationTargetException error){throw new IllegalStateException("Touch injection failed",error.getCause());}
+        catch(ReflectiveOperationException error){throw new IllegalStateException("Touch injection unavailable",error);}
+        finally{maxInjectionMs=Math.max(maxInjectionMs,SystemClock.uptimeMillis()-started);}
         forwarded++;
     }
     private void cancel(){
         if(last!=null && last.getActionMasked()!=MotionEvent.ACTION_UP){
-            MotionEvent cancel=MotionEvent.obtain(last);cancel.setAction(MotionEvent.ACTION_CANCEL);
+            // A held/stalled stream can have an old last sample. Timestamp cleanup
+            // now rather than replaying the interrupted contact's old event time.
+            int count=last.getPointerCount();
+            MotionEvent.PointerProperties[] props=new MotionEvent.PointerProperties[count];
+            MotionEvent.PointerCoords[] coords=new MotionEvent.PointerCoords[count];
+            for(int i=0;i<count;i++){
+                props[i]=new MotionEvent.PointerProperties();last.getPointerProperties(i,props[i]);
+                coords[i]=new MotionEvent.PointerCoords();last.getPointerCoords(i,coords[i]);
+            }
+            MotionEvent cancel=MotionEvent.obtain(last.getDownTime(),SystemClock.uptimeMillis(),MotionEvent.ACTION_CANCEL,
+                    count,props,coords,last.getMetaState(),last.getButtonState(),last.getXPrecision(),last.getYPrecision(),
+                    0,last.getEdgeFlags(),InputDevice.SOURCE_TOUCHSCREEN,last.getFlags());
             try{inject(cancel);}finally{cancel.recycle();}
         }
     }
@@ -193,7 +244,8 @@ public final class TouchFilterService extends AccessibilityService {
     public void onAccessibilityEvent(AccessibilityEvent event){}
     public void onInterrupt(){if(filtering)restartStream();}
     protected void dump(java.io.FileDescriptor fd,java.io.PrintWriter out,String[] args){
-        out.println("ScreenSafe touch filter: active="+filtering+" blockedSamples="+blocked+" forwardedEvents="+forwarded+" failures="+failures+" recoveries="+recoveries+" generation="+generation);
+        out.println("ScreenSafe touch filter: active="+filtering+" blockedSamples="+blocked+" forwardedEvents="+forwarded+" failures="+failures+" recoveries="+recoveries+" generation="+generation
+                +" queued="+queued.get()+" staleEvents="+staleEvents+" maxQueueDelayMs="+maxQueueDelayMs+" maxInjectionMs="+maxInjectionMs);
     }
     public void onDestroy(){if(receiving){unregisterReceiver(screenState);receiving=false;}disable();current=null;if(thread!=null)thread.quitSafely();super.onDestroy();}
 }

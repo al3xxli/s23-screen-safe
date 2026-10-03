@@ -1,6 +1,25 @@
-# Adaptive rotation investigation — October 1, 2026
+# Adaptive layout and touch investigation
 
-## Current status: 0.8, Camera remains usable after rotation
+
+## Current status: 0.9, notification geometry and touch recovery — October 3, 2026
+
+This section supersedes the earlier checkpoints. Version 0.9 is installed and active on the test phone. It retains the 20% protected strip, 0.8 Camera stall correction, wallpaper correction, and untimed activation. Rotation blink remains unresolved. The reported intermittent unresponsive touch has not been reproduced during this investigation, and no physical user touches have yet validated this version; its elimination is not established.
+
+The notification defect was reproduced in portrait: notification-card content ended at x=822 (1440 minus the 618-pixel protected strip), while the header and footer still spanned the screen. Framework window/inset reports described the full 1440-pixel width. Changing only `OneHanded:17:17`, Samsung's notification-shade display area, to local `(0,0,width,height)` configuration corrected the card crop while its surface remained at the physical protected viewport origin. Captures now show the full 1440-pixel card width.
+
+Local shade bounds initially left its footer overlapping the native navigation bar because the bar's physical frame no longer matched the shade's local frame. `ShadeInsets` now mirrors only visible native navigation space into that shade's coordinate system: intersect the physical bar with the safe viewport, translate to local coordinates, and clamp. The controller polls visibility/frame changes even when rotation and density are unchanged. A mismatched display-size snapshot is deferred. App bounds are not shrunk, and other app areas retain physical bounds and native system-bar insets. The wallpaper child retains its native dimensions and physical origin. Settled captures in portrait and both landscape directions show the corrected footer clear of navigation.
+
+The local source has one stable Binder owner and is explicitly removed during restoration. Android 16's [WindowContainer implementation](https://raw.githubusercontent.com/aosp-mirror/platform_frameworks_base/android16-release/services/core/java/com/android/server/wm/WindowContainer.java) also removes an owner's local sources on Binder death. This is framework evidence; Samsung cleanup behavior requires live verification.
+
+For the touch issue, the pre-update filter was still running after more than two days, with zero recorded forwarding failures. That rules out an observed crash or failed injection return in that snapshot, but does not prove it was responsive during an earlier freeze. The user described freezes during ordinary use, sometimes requiring multiple lock/unlock cycles.
+
+The old `UiAutomation.injectInputEvent(event,false)` path waits for window animations despite requesting asynchronous injection. Android 16's [UiAutomation](https://raw.githubusercontent.com/aosp-mirror/platform_frameworks_base/android16-release/core/java/android/app/UiAutomation.java) and [UiAutomationConnection](https://raw.githubusercontent.com/aosp-mirror/platform_frameworks_base/android16-release/core/java/android/app/UiAutomationConnection.java) implementations confirm the animation wait around DOWN/UP. The new filter resolves the three-argument overload before enabling capture and calls it with both waiting flags false. Updated launchers enable hidden API access only for the instrumentation process through `--no-hidden-api-checks`; they do not change a global policy. This removes a plausible source of ordinary-use stalls, but Android still synchronizes input-window metadata, and the reported freeze has not been conclusively attributed to this path.
+
+The worker now cancels and clears a stream when an event is older than 500 ms. It discards stale events rather than replaying delayed taps. Cancellation uses a current timestamp, orphan MOVE/UP cannot become clicks, and a new fresh contact can recover without a lock cycle. The policy measures each sample's event time, not the gesture's original down time, so it does not impose a maximum press duration. Diagnostics report queue depth, stale-event count, maximum queue delay, and maximum injection time. No speculative queue rewrite or automatic touch remapping was added.
+
+All three host suites pass, including protected/mixed pointers, historical unsafe samples, original-coordinate forwarding, lifecycle recovery, non-waiting injection flags, stale-UP cancellation, shade-only local bounds, navigation visibility updates, coherent snapshots, failed-apply retry, and restoration. Production sources compile against Android 36; APK signing and verification passed. These checks support the implementation but do not replace physical touch testing or long-term use. See VERIFICATION.md for the final live checks. Private screen captures, notification contents, and device dumps remain outside Git.
+
+## Previous checkpoint: 0.8, Camera remains usable after rotation
 
 This section supersedes the earlier checkpoints. The retained correction removes the all-area redraw synchronization from the 0.7 display controller. It keeps the 20% strip, physical window bounds, inherited native insets, wallpaper geometry, and surface-position maintenance.
 
