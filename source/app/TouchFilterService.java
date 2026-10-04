@@ -2,7 +2,6 @@ package ca.screensafe.app;
 
 import android.accessibilityservice.AccessibilityService;
 import android.accessibilityservice.AccessibilityServiceInfo;
-import android.app.UiAutomation;
 import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
@@ -19,6 +18,8 @@ import java.util.HashSet;
 import java.lang.reflect.Method;
 import java.lang.reflect.InvocationTargetException;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import ca.screensafe.core.SafeArea;
 
 /** Consumes physical touchscreen events before window and gesture-monitor dispatch. */
@@ -26,8 +27,9 @@ public final class TouchFilterService extends AccessibilityService {
     public static volatile TouchFilterService current;
     private HandlerThread thread;
     private Handler worker;
-    private volatile UiAutomation injector;
-    private Method injectWithoutAnimationWait;
+    private volatile Object injector;
+    private Object windowManager;
+    private Method injectAsync,syncInputTransactions;
     public volatile boolean filtering;
     public volatile long blocked, forwarded, failures;
     private final HashSet<Integer> allowed=new HashSet<>();
@@ -68,8 +70,8 @@ public final class TouchFilterService extends AccessibilityService {
         if(!receiving){registerReceiver(screenState,screen,Context.RECEIVER_NOT_EXPORTED);receiving=true;}
         configure(false);
         SessionRunner session=SessionRunner.current;
-        if(session!=null&&session.busy&&session.automation!=null){
-            try{enable(session.automation);}catch(RuntimeException error){
+        if(session!=null&&session.busy&&session.ready){
+            try{enable();}catch(RuntimeException error){
                 session.status="Touch filter could not start. Restoring the screen.";
                 android.util.Log.e("ScreenSafeFilter","Could not prepare touch injection",error);
                 session.request("STOP");
@@ -81,17 +83,22 @@ public final class TouchFilterService extends AccessibilityService {
         info.setMotionEventSources(enabled?InputDevice.SOURCE_TOUCHSCREEN:0);
         setServiceInfo(info);
     }
-    // Called on the application's main thread, with injection already available.
-    public void enable(UiAutomation automation){
+    // Called on the application's main thread after bootstrap has delegated input
+    // permission. Keep direct system-service handles, not the bootstrap owner's binder.
+    public void enable(){
         if(filtering)return;
-        // The public two-argument overload waits for all window animations even
-        // with sync=false. Resolve the non-waiting overload before capturing input.
-        // The ADB launcher enables hidden API access for this instrumentation only.
-        final Method nonWaiting;
-        try{nonWaiting=UiAutomation.class.getMethod("injectInputEvent",InputEvent.class,boolean.class,boolean.class);}
-        catch(ReflectiveOperationException error){throw new IllegalStateException("Restart Screen Safe using its updated computer launcher",error);}
+        final Object input,wm;
+        final Method injection,transactionSync;
+        try{
+            Class<?> inputType=Class.forName("android.hardware.input.InputManagerGlobal");
+            input=inputType.getMethod("getInstance").invoke(null);
+            injection=inputType.getMethod("injectInputEvent",InputEvent.class,int.class);
+            wm=Class.forName("android.view.WindowManagerGlobal").getMethod("getWindowManagerService").invoke(null);
+            transactionSync=Class.forName("android.view.IWindowManager").getMethod("syncInputTransactions",boolean.class);
+            if(input==null||wm==null)throw new IllegalStateException("Android input services unavailable");
+        }catch(ReflectiveOperationException error){throw new IllegalStateException("Restart Screen Safe using its updated computer launcher",error);}
         generation++;
-        worker.post(new Runnable(){public void run(){reset();injector=automation;injectWithoutAnimationWait=nonWaiting;}});
+        worker.post(new Runnable(){public void run(){reset();injector=input;windowManager=wm;injectAsync=injection;syncInputTransactions=transactionSync;}});
         blocked=forwarded=failures=recoveries=0;
         staleEvents=maxQueueDelayMs=maxInjectionMs=0;
         rawEvents=mixedSamples=suppressedStationary=cancelledStreams=0;
@@ -103,6 +110,16 @@ public final class TouchFilterService extends AccessibilityService {
         if(!filtering)return;
         filtering=false;generation++;configure(false);
         worker.post(new Runnable(){public void run(){try{clearStream();}finally{injector=null;}}});
+    }
+    /** Call off the main thread after disable() before revoking input permission. */
+    public boolean awaitDisabled(){
+        if(filtering)return false;
+        Handler target=worker;
+        if(target==null)return true;
+        final CountDownLatch drained=new CountDownLatch(1);
+        if(!target.post(new Runnable(){public void run(){drained.countDown();}}))return false;
+        try{return drained.await(5,TimeUnit.SECONDS)&&!filtering;}
+        catch(InterruptedException error){Thread.currentThread().interrupt();return false;}
     }
     private void restartStream(){
         generation++;
@@ -274,11 +291,17 @@ public final class TouchFilterService extends AccessibilityService {
     }
     private void inject(MotionEvent e){
         if(testSink!=null){testSink.send(e);return;}
-        UiAutomation target=injector;
-        if(target==null||injectWithoutAnimationWait==null)throw new IllegalStateException("Touch injection unavailable");
+        Object target=injector;
+        if(target==null||windowManager==null||injectAsync==null||syncInputTransactions==null)
+            throw new IllegalStateException("Touch injection unavailable");
         long started=SystemClock.uptimeMillis();
         try{
-            if(!Boolean.TRUE.equals(injectWithoutAnimationWait.invoke(target,e,false,false)))throw new IllegalStateException("Touch injection unavailable");
+            // Match UiAutomation's input-window synchronization without waiting for
+            // animations or depending on its temporary shell-owned connection.
+            if(e.getActionMasked()==MotionEvent.ACTION_DOWN)syncInputTransactions.invoke(windowManager,false);
+            boolean accepted=Boolean.TRUE.equals(injectAsync.invoke(target,e,0)); // INJECT_INPUT_EVENT_MODE_ASYNC
+            if(e.getActionMasked()==MotionEvent.ACTION_UP)syncInputTransactions.invoke(windowManager,false);
+            if(!accepted)throw new IllegalStateException("Touch injection unavailable");
         }catch(InvocationTargetException error){throw new IllegalStateException("Touch injection failed",error.getCause());}
         catch(ReflectiveOperationException error){throw new IllegalStateException("Touch injection unavailable",error);}
         finally{maxInjectionMs=Math.max(maxInjectionMs,SystemClock.uptimeMillis()-started);}

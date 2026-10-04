@@ -14,15 +14,29 @@ stubs = {
 'android/content/IntentFilter.java': '''package android.content; public class IntentFilter {public void addAction(String s){}}''',
 'android/os/Looper.java': '''package android.os; public class Looper {}''',
 'android/os/SystemClock.java': '''package android.os; public class SystemClock {public static long now=10000; public static long uptimeMillis(){return now;}}''',
-'android/os/Handler.java': '''package android.os; import java.util.ArrayDeque; public class Handler {public static final ArrayDeque<Runnable> queue=new ArrayDeque<>(); public Handler(Looper l){} public boolean post(Runnable r){queue.add(r);return true;} public static void drain(){while(!queue.isEmpty())queue.remove().run();}}''',
+'android/os/Handler.java': '''package android.os; public class Handler {public static final java.util.concurrent.ConcurrentLinkedQueue<Runnable> queue=new java.util.concurrent.ConcurrentLinkedQueue<>(); public static volatile java.util.concurrent.CountDownLatch postedSignal; public static boolean rejectPosts; public Handler(Looper l){} public boolean post(Runnable r){if(rejectPosts)return false;queue.add(r);java.util.concurrent.CountDownLatch signal=postedSignal;if(signal!=null)signal.countDown();return true;} public static void drain(){Runnable next;while((next=queue.poll())!=null)next.run();}}''',
 'android/os/HandlerThread.java': '''package android.os; public class HandlerThread {public HandlerThread(String s){} public void start(){} public Looper getLooper(){return new Looper();} public void quitSafely(){}}''',
 'android/accessibilityservice/AccessibilityServiceInfo.java': '''package android.accessibilityservice; public class AccessibilityServiceInfo {public int sources; public void setMotionEventSources(int s){sources=s;}}''',
 'android/accessibilityservice/AccessibilityService.java': '''package android.accessibilityservice; public class AccessibilityService extends android.content.Context {private AccessibilityServiceInfo info=new AccessibilityServiceInfo(); public AccessibilityServiceInfo getServiceInfo(){return info;} public void setServiceInfo(AccessibilityServiceInfo i){info=i;} public android.os.Looper getMainLooper(){return new android.os.Looper();} public void onDestroy(){}}''',
 'android/view/accessibility/AccessibilityEvent.java': '''package android.view.accessibility; public class AccessibilityEvent {}''',
 'android/view/InputDevice.java': '''package android.view; public class InputDevice {public static final int SOURCE_TOUCHSCREEN=4098;}''',
-'android/app/UiAutomation.java': '''package android.app; public class UiAutomation {public int injected; public boolean injectInputEvent(android.view.InputEvent e,boolean sync){throw new AssertionError("Two-argument injection waits for animation");} public boolean injectInputEvent(android.view.InputEvent e,boolean sync,boolean waitForAnimations){if(sync||waitForAnimations)throw new AssertionError("Live forwarding must not wait for animation/dispatch");injected++;return true;}}''',
+'android/hardware/input/InputManagerGlobal.java': '''package android.hardware.input;
+public class InputManagerGlobal {
+ public static final InputManagerGlobal instance=new InputManagerGlobal();
+ public static final java.util.ArrayList<String> trace=new java.util.ArrayList<>();
+ public static int injected;public static boolean rejectNext,throwNext,failResolve;
+ public static InputManagerGlobal getInstance(){if(failResolve)throw new SecurityException("Hidden input API unavailable");return instance;}
+ public boolean injectInputEvent(android.view.InputEvent event,int mode){if(mode!=0)throw new AssertionError("Forwarding must use MODE_ASYNC");trace.add("inject:"+((android.view.MotionEvent)event).getActionMasked());if(throwNext){throwNext=false;throw new SecurityException("Input permission lost");}if(rejectNext){rejectNext=false;return false;}injected++;return true;}
+ public static void reset(){trace.clear();injected=0;rejectNext=throwNext=failResolve=false;}
+}''',
+'android/view/IWindowManager.java': '''package android.view; public interface IWindowManager {void syncInputTransactions(boolean waitForAnimations);}''',
+'android/view/WindowManagerGlobal.java': '''package android.view;
+public class WindowManagerGlobal {
+ public static boolean failNextSync;
+ public static IWindowManager getWindowManagerService(){return new IWindowManager(){public void syncInputTransactions(boolean waitForAnimations){if(waitForAnimations)throw new AssertionError("Input sync must not wait for animations");android.hardware.input.InputManagerGlobal.trace.add("sync:"+waitForAnimations);if(failNextSync){failNextSync=false;throw new SecurityException("Window input sync unavailable");}}};}
+}''',
 'android/util/Log.java': '''package android.util; public class Log {public static int e(String t,String m,Throwable e){return 0;} public static int w(String t,String m,Throwable e){return 0;}}''',
-'ca/screensafe/app/SessionRunner.java': '''package ca.screensafe.app; public class SessionRunner {public static SessionRunner current; public boolean autoStart,busy; public android.app.UiAutomation automation; public String status; public void request(String s){}}''',
+'ca/screensafe/app/SessionRunner.java': '''package ca.screensafe.app; public class SessionRunner {public static SessionRunner current; public boolean autoStart,busy,ready; public String lastRequest; public String status; public void request(String s){lastRequest=s;}}''',
 'android/view/InputEvent.java': '''package android.view; public class InputEvent {}''',
 'android/view/MotionEvent.java': '''package android.view;
 public class MotionEvent extends InputEvent {
@@ -60,10 +74,10 @@ public class MotionEvent extends InputEvent {
 import android.os.Handler;import android.view.MotionEvent;import android.view.InputDevice;
 public class HostChecks {
  static MotionEvent down(){MotionEvent.PointerProperties p=new MotionEvent.PointerProperties();p.id=0;MotionEvent.PointerCoords c=new MotionEvent.PointerCoords();c.y=1500;return MotionEvent.obtain(1,android.os.SystemClock.uptimeMillis(),0,1,new MotionEvent.PointerProperties[]{p},new MotionEvent.PointerCoords[]{c},0,0,1,1,0,0,InputDevice.SOURCE_TOUCHSCREEN,0);}
- public static void main(String[] args){
+ public static void main(String[] args) throws Exception {
   if(args.length>0){System.out.println(TouchFilterChecks.ghostChecks());return;}
   System.out.println(TouchFilterChecks.run());
-  SessionRunner.current=new SessionRunner();SessionRunner.current.busy=true;SessionRunner.current.automation=new android.app.UiAutomation();
+  SessionRunner.current=new SessionRunner();SessionRunner.current.busy=true;SessionRunner.current.ready=true;
   TouchFilterService f=TouchFilterChecks.fresh();f.onServiceConnected();Handler.drain();
   f.onMotionEvent(down());f.receiver.onReceive(f,new android.content.Intent());Handler.drain();
   TouchFilterChecks.actions();
@@ -71,7 +85,7 @@ public class HostChecks {
   f.onServiceConnected();Handler.drain();TouchFilterChecks.actions(0,3);
   TouchFilterChecks.require(f.filtering&&f.getServiceInfo().sources==InputDevice.SOURCE_TOUCHSCREEN,"Reconnect did not restore capture");
   f.onMotionEvent(down());Handler.drain();TouchFilterChecks.actions(0,3,0);
-  f.disable();f.enable(SessionRunner.current.automation);Handler.drain();
+  f.disable();f.enable();Handler.drain();
   f.onMotionEvent(down());Handler.drain();TouchFilterChecks.actions(0,3,0,3,0);
   System.out.println("PASS: queued pre-lock events discarded, service reconnect, disable/enable ordering.");
   f.setRotation(1);f.setRotation(0);Handler.drain();
@@ -90,13 +104,39 @@ public class HostChecks {
   }
   System.out.println("PASS: all four rotations preserve usable area and physical mask.");
   System.out.println("PASS: 20% boundary, unmodified forwarded coordinates, and batched unsafe samples.");
-  // Exercise production reflection/flags, not the test sink, including cancellation.
-  f.disable();Handler.drain();
+  // Exercise direct system-service reflection and synchronization, without UiAutomation.
+  f.disable();Handler.drain();android.hardware.input.InputManagerGlobal.reset();
   f=new TouchFilterService();f.onServiceConnected();Handler.drain();
+  f.onMotionEvent(down());Handler.drain();
+  MotionEvent moving=down();moving.setAction(MotionEvent.ACTION_MOVE);f.onMotionEvent(moving);Handler.drain();
+  MotionEvent ending=down();ending.setAction(MotionEvent.ACTION_UP);f.onMotionEvent(ending);Handler.drain();
   f.onMotionEvent(down());Handler.drain();f.onInterrupt();Handler.drain();
-  TouchFilterChecks.require(SessionRunner.current.automation.injected==2,"Non-waiting injection did not forward DOWN and CANCEL");
-  System.out.println("PASS: production injector bypasses animation waits for both normal events and cancellation.");
+  TouchFilterChecks.require(android.hardware.input.InputManagerGlobal.injected==5,"Direct injector did not forward DOWN/MOVE/UP/DOWN/CANCEL");
+  TouchFilterChecks.require(android.hardware.input.InputManagerGlobal.trace.toString().equals("[sync:false, inject:0, inject:2, inject:1, sync:false, sync:false, inject:0, inject:3]"),"Input-window synchronization order changed: "+android.hardware.input.InputManagerGlobal.trace);
+  System.out.println("PASS: direct asynchronous input injection syncs input windows before DOWN/after UP without animation waits or shell-owner calls.");
   f.disable();Handler.drain();
+  // API preparation must finish before capture becomes active.
+  android.hardware.input.InputManagerGlobal.failResolve=true;
+  f=new TouchFilterService();f.onServiceConnected();Handler.drain();
+  TouchFilterChecks.require(!f.filtering&&f.getServiceInfo().sources==0&&"STOP".equals(SessionRunner.current.lastRequest),"Failed direct injector preparation captured physical touches");
+  android.hardware.input.InputManagerGlobal.reset();
+  for(int failure=0;failure<3;failure++){
+   f=new TouchFilterService();f.onServiceConnected();Handler.drain();
+   if(failure==0)android.hardware.input.InputManagerGlobal.rejectNext=true;
+   if(failure==1)android.hardware.input.InputManagerGlobal.throwNext=true;
+   if(failure==2)android.view.WindowManagerGlobal.failNextSync=true;
+   f.onMotionEvent(down());Handler.drain();
+   TouchFilterChecks.require(!f.filtering&&f.getServiceInfo().sources==0&&f.failures==1&&f.activePointers==0,"Direct input failure did not stop capture and clear stream: "+failure);
+   f.enable();Handler.drain();f.onMotionEvent(down());Handler.drain();
+   TouchFilterChecks.require(f.filtering&&f.forwarded==1,"Direct input did not recover after explicit restart");
+   f.disable();Handler.drain();
+  }
+  // A reconnect before bootstrap readiness must not enable input capture.
+  SessionRunner.current.ready=false;
+  f=new TouchFilterService();f.onServiceConnected();Handler.drain();
+  TouchFilterChecks.require(!f.filtering&&f.getServiceInfo().sources==0,"Input captured before permission bootstrap ready");
+  SessionRunner.current.ready=true;
+  System.out.println("PASS: direct-injector preparation, rejection, exceptions, window-sync failures, and readiness gating fail safely and recover.");
   f=TouchFilterChecks.fresh();f.onServiceConnected();Handler.drain();
   f.onMotionEvent(down());Handler.drain();
   MotionEvent old=down();old.setAction(MotionEvent.ACTION_UP);f.onMotionEvent(old);
@@ -105,6 +145,29 @@ public class HostChecks {
   MotionEvent orphan=down();orphan.setAction(MotionEvent.ACTION_MOVE);f.onMotionEvent(orphan);Handler.drain();TouchFilterChecks.actions(0,3);
   f.onMotionEvent(down());Handler.drain();TouchFilterChecks.actions(0,3,0);
   System.out.println("PASS: queued stall cancels stale UP, ignores orphan MOVE, and accepts the next fresh DOWN.");
+  f.disable();Handler.drain();
+  TouchFilterChecks.require(new TouchFilterService().awaitDisabled(),"Unused filter unexpectedly needs a worker drain");
+  f=new TouchFilterService();f.onServiceConnected();Handler.drain();
+  TouchFilterChecks.require(!f.awaitDisabled(),"Active filtering incorrectly reported disabled/drained");
+  f.onMotionEvent(down());Handler.drain();
+  final TouchFilterService shuttingDown=f;
+  int injectedBeforeDisable=android.hardware.input.InputManagerGlobal.injected;
+  f.disable();
+  TouchFilterChecks.require(android.hardware.input.InputManagerGlobal.injected==injectedBeforeDisable,"Disable should enqueue worker cancellation");
+  final java.util.concurrent.atomic.AtomicBoolean drained=new java.util.concurrent.atomic.AtomicBoolean();
+  Handler.postedSignal=new java.util.concurrent.CountDownLatch(1);
+  Thread shutdownWait=new Thread(new Runnable(){public void run(){drained.set(shuttingDown.awaitDisabled());}});
+  shutdownWait.start();
+  TouchFilterChecks.require(Handler.postedSignal.await(1,java.util.concurrent.TimeUnit.SECONDS),"Shutdown barrier was not queued");
+  Handler.postedSignal=null;Handler.drain();shutdownWait.join(1000);
+  TouchFilterChecks.require(!shutdownWait.isAlive()&&drained.get(),"Disabled worker did not drain");
+  TouchFilterChecks.require(android.hardware.input.InputManagerGlobal.injected==injectedBeforeDisable+1&&shuttingDown.activePointers==0,"Drain returned before final CANCEL/reset");
+  final java.util.concurrent.atomic.AtomicBoolean interruptedResult=new java.util.concurrent.atomic.AtomicBoolean();
+  Thread interruptedWait=new Thread(new Runnable(){public void run(){Thread.currentThread().interrupt();interruptedResult.set(!shuttingDown.awaitDisabled()&&Thread.currentThread().isInterrupted());}});
+  interruptedWait.start();interruptedWait.join(1000);Handler.drain();
+  TouchFilterChecks.require(!interruptedWait.isAlive()&&interruptedResult.get(),"Interrupted drain lost interruption or reported success");
+  Handler.rejectPosts=true;TouchFilterChecks.require(!shuttingDown.awaitDisabled(),"Rejected barrier reported successful drain");Handler.rejectPosts=false;
+  System.out.println("PASS: disable barrier waits for final cancellation, rejects active capture/failed posting, and preserves interruption.");
  }
 }'''
 }
@@ -117,7 +180,7 @@ def run():
         target = base / name
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(source, encoding='utf-8')
-    sources = list(base.rglob('*.java'))
+    sources = [base / name for name in stubs]
     sources += [root / 'source/app/TouchFilterService.java', root / 'source/app/TouchFilterChecks.java']
     sources += list((root / 'source/shared').glob('*.java'))
     classes = base / 'classes'

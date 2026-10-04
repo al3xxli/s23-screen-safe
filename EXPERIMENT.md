@@ -1,5 +1,15 @@
 # Adaptive layout and touch investigation
 
+## Current status: 0.11, USB-independent app session — October 4, 2026
+
+USB mode changes can restart adbd and kill its entire process group. The old launcher and backend remained in that group even after `nohup setsid`. A temporary on-device experiment established that the app's delegated permissions and direct input calls can survive the shell owner's death. The activated instrumentation itself belongs to an app process outside adbd's cgroup.
+
+The new session uses UiAutomation only to delegate the specific required permissions and prepare computer recovery. It then destroys that connection before applying protection. The embedded organizer and direct InputManager forwarding remain in the app; no ongoing shell pipe, launcher Binder, or heartbeat is needed. Android keeps permission delegation until instrumentation ends: see [AccessCheckDelegateHelper](https://raw.githubusercontent.com/aosp-mirror/platform_frameworks_base/android16-release/services/core/java/com/android/server/am/AccessCheckDelegateHelper.java) and [UiAutomationConnection disconnect](https://raw.githubusercontent.com/aosp-mirror/platform_frameworks_base/android16-release/core/java/android/app/UiAutomationConnection.java). Shizuku's [starter](https://raw.githubusercontent.com/RikkaApps/Shizuku/master/manager/src/main/jni/starter.cpp) only migrates cgroups in its root branch, so installing it alone would not solve the observed no-root process group problem.
+
+Actual USB tethering-mode transitions killed the launcher while the same app retained all nine organized areas and active filtering. The user confirmed touch, notification positioning, and lock/unlock. The final build additionally passed Restore, Protect, and End from the app after launcher loss. Restore retains handles and the guard when configuration restoration cannot be confirmed; End waits for queued touch cancellation before finishing instrumentation. All four host suites and device generated-event checks passed. See VERIFICATION.md for checkpoints and limits.
+
+The shell backend remains as a separate computer recovery tool. Its new prepare command leaves an explicit marker before resizing, allowing the computer to recognize and restore interrupted geometry even if the app later terminates. The embedded code retains the previous geometry and shade algorithms; host regression coverage now exercises both hosts. App termination and reboot still require activation. This change does not claim unconditional always-on operation or resolve the remaining Camera rotation blink.
+
 ## Session-loss recovery — October 4, 2026
 
 The notification panel and lock-screen clock shifted upward together after ordinary use. Capture before reactivation showed that the instrumentation launcher and backend had exited, organizer ownership was gone, and touch filtering was inactive with one failure. The black guard and display-area bounds remained. Because the shared notification/keyguard area uses local bounds, loss of its separately maintained surface offset placed it at y=0 instead of y=618; other app areas retained their physical origins.
@@ -7,7 +17,7 @@ The notification panel and lock-screen clock shifted upward together after ordin
 USB tethering (`rndis,adb`) was active when inspected. The original exit stack was no longer present in the available logs; do not claim this capture alone establishes the exact reason for the process exit. The user authorized returning to charging. Resetting screen-unlocked/current USB functions and reactivating the existing 0.10 build restored organizer ownership, the 618-pixel shade translation, and active touch filtering. A settled notification capture fit correctly. This was operational recovery, with no new geometry or APK changes; USB/session lifetime remains a limitation.
 
 
-## Current status: 0.10, ghost-contact traffic and invalid cancellation — October 3, 2026
+## Prior status: 0.10, ghost-contact traffic and invalid cancellation — October 3, 2026
 
 The user reported that Maps stopped responding while the Samsung accessibility menu showed ghost contacts in the blocked top 20%. That display is useful evidence of physical contacts, but it does not establish delivery to Maps. The original Maps freeze was not captured. The investigation below reproduced two software defects, including one that demonstrably leaves Android's input dispatcher rejecting fresh gestures.
 

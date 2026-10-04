@@ -1,6 +1,6 @@
-# Screen Safe 0.10 preview — S23 Ultra
+# Screen Safe 0.11 preview — S23 Ultra
 
-This preview blocks the damaged top **20%** and places apps in the remaining physical screen area. Version 0.10 corrects a touch-cancellation defect reproduced in Android's actual input dispatcher and suppresses redundant forwarded moves caused solely by blocked ghost contacts. It retains the notification-panel and navigation-spacing corrections. **The original Maps freeze was not captured, so these findings do not establish that every reported freeze is fixed or that ghost coordinates were being remapped. Rotation blink remains unresolved.**
+This preview blocks the damaged top **20%** and places apps in the remaining physical screen area. Version 0.11 runs the layout controller and touch forwarding inside the activated app process, removing their ongoing dependency on the USB debugging launcher. Version 0.10 corrects a touch-cancellation defect reproduced in Android's actual input dispatcher and suppresses redundant forwarded moves caused solely by blocked ghost contacts. It retains the notification-panel and navigation-spacing corrections. **The original Maps freeze was not captured, so these findings do not establish that every reported freeze is fixed or that ghost coordinates were being remapped. Rotation blink remains unresolved.**
 
 Tested device: Samsung SM-S918W, Android 16 / One UI 8.5, physical resolution 1440 × 3088. No root is required. The natural top 618 pixels (20%, rounded up) are masked; the interface uses the remaining area. The damaged edge follows rotation. The 0.8 Camera rotation-stall correction and the previously confirmed wallpaper correction are retained.
 
@@ -12,17 +12,17 @@ Run **Restore Screen.cmd** to stop protection and restore full-screen geometry. 
 
 `Trial.ps1` starts an optional five-minute developer test that attempts automatic restoration. Normal activation uses `Activate.ps1` and has no trial timer.
 
-The updated launchers enable hidden API access only for Screen Safe's instrumentation process, using `am instrument --no-hidden-api-checks`. This permits the injection overload that skips animation waits; no global hidden API policy setting is changed.
+The updated launchers enable hidden API access only for Screen Safe's instrumentation process, using `am instrument --no-hidden-api-checks`. This permits direct system input and window APIs; no global hidden API policy setting is changed. The bootstrap delegates only input injection, task/window control, internal guard-window, status-bar, and read-only diagnostic permissions (DUMP and PACKAGE_USAGE_STATS, both required for Android's ownership dump). It then destroys the shell automation connection before protection starts. Android removes delegation when instrumentation ends.
 
-## USB disconnection and screen locking
+## USB tethering and session lifetime
 
-Keep **Default USB configuration** set to **No data transfer / Charging** while using this preview, with USB debugging enabled. This phone previously defaulted to USB tethering: locking switched it to charging, then unlocking switched it back. Those changes restarted Android's debugging service and killed Screen Safe's controller, leaving the black guard visible while the content shifted upward.
+The activated app owns display-area organization and forwards touches directly to Android. Changing USB modes may stop the old shell launcher, but ongoing protection does not call it or run a shell backend. There is no network listener, wireless-debugging requirement, added app, root requirement, or recurring computer task.
 
-Changing the default to charging fixed the tested unplug, lock/unlock, and reconnect cycle. The same controller and backend processes survived, and the touch filter stayed active with zero forwarding failures. Shell detachment (`nohup setsid`) alone did not fix the USB-mode restart.
+The charging default remains a convenience; version 0.11 passed actual USB tethering-mode switches. Android restarted adbd and removed the original launcher, while the same app process retained all nine organized areas and active filtering. The user confirmed responsive taps/swipes, correctly positioned notifications, and lock/unlock behavior afterward. A computer is still needed after reboot, force-stop, an ended instrumentation session, or app-process termination. This is not an unconditional always-on system service. The app already receives foreground priority while its activated instrumentation runs.
 
-The charging default is already applied to the test phone. This disables automatic USB tethering. If you re-enable tethering, change USB mode, disable debugging, or reboot, protection may end; reconnect and run **Start Screen Safe.cmd** after selecting charging again. The wallpaper fix is retained, and rotation blink remains unresolved.
+Use **Restore full screen** in the app to stop protection, and **Protect top 20%** to restart it during the same activated session, including after a USB mode change. **End activated session** restores first, waits for touch cancellation to finish, then ends the delegated permissions. The computer's **Restore Screen.cmd** remains the recovery path after app termination.
 
-Developer commands for the tested setting are `adb shell svc usb setScreenUnlockedFunctions` and `adb shell svc usb setFunctions`, both without a function argument. Apply them before activation because changing mode may end a running session. The previous default can be restored with `adb shell svc usb setScreenUnlockedFunctions rndis`; this reintroduces the mode-switch risk.
+At activation, the shell writes a recovery marker before any resize. The app's own start/stop cycle uses direct Binder calls and keeps this marker for emergency computer recovery; the next computer restore removes it. Read-only ownership checks remain in place to avoid taking over another active display feature.
 
 ## Changes and verification
 
@@ -31,12 +31,14 @@ Developer commands for the tested setting are `adb shell svc usb setScreenUnlock
 - Report raw events, mixed-contact samples, suppressed stationary moves, active/rejected pointers, maximum physical pointer count, and recovery causes. These distinguish ghost traffic and exhausted or interrupted pointer streams from app-delivered input.
 - Give only Samsung's notification-shade display area local window bounds, while keeping its surface at the protected viewport's physical position. This corrects the reproduced right-side notification-card crop.
 - Mirror the visible native navigation inset into that shade's local coordinates. Remove it when hidden or restoring, and refresh when its frame changes. Other app areas retain physical bounds and native insets; no global spacer or app-bounds shrink is added.
-- Forward touches without waiting for window animations. The prior two-argument `UiAutomation` call waited for animations even with asynchronous injection; Android's input-window synchronization still remains. See the [Android 16 UiAutomation implementation](https://raw.githubusercontent.com/aosp-mirror/platform_frameworks_base/android16-release/core/java/android/app/UiAutomation.java).
+- Forward touches directly with `InputManagerGlobal`, retaining input-window synchronization before DOWN and after UP without waiting for animations. Gesture filtering and the 0.10 pointer/ghost corrections are retained.
 - Cancel an interrupted stream and discard events older than 500 ms, preventing delayed taps from replaying after a stall. Only a subsequent fresh DOWN or POINTER_DOWN can admit a contact. Normal long-held gestures remain valid when their samples are current.
 - Report queued events, discarded stale events, maximum queue delay, and maximum injection time in the service dump to distinguish future input stalls from a dead service.
 - Retain immediate rotation layout updates, native wallpaper dimensions, the 250 ms surface-position/crop maintenance, shared 20% geometry, and interrupted-gesture/service-reconnection recovery.
 
-Host gesture/lifecycle checks, Android 36 compilation, and on-device generated-event checks passed for 0.10. The build is installed with protection active and no timeout. The controlled device reproduction verified Android rejecting the old cancellation and accepting cancellation containing only the remaining pointer. An app receiver observed no extra events during thousands of protected-strip ghost samples; it received only the ten controlled synthetic test events. A later short physical test delivered both single-finger and two-finger gestures with no injection failures, protected-area breaches, or stream anomalies. Simultaneous physical ghost contacts and good fingers were not present in that test; the host stress tests cover that combination. These observations do not establish long-term reliability. The 0.9 captures verified notification cards and navigation spacing in portrait and both landscape directions; its backend and layout are unchanged in 0.10. See [EXPERIMENT.md](EXPERIMENT.md) and [VERIFICATION.md](VERIFICATION.md) for evidence and limits.
+Version 0.11 passed all four host suites, Android 36 compilation, and on-device generated-event checks. After the USB launcher died, the app's Restore, Protect, and End buttons were also checked: restoration cleared all nine area overrides, restart resumed filtering, and End restored geometry before its app process exited. Protection is reactivated without a timeout. USB networking throughput was not tested; extended ordinary-use reliability and rotation blink remain open.
+
+Prior 0.10 validation: host gesture/lifecycle checks, Android 36 compilation, and on-device generated-event checks passed. The controlled device reproduction verified Android rejecting the old cancellation and accepting cancellation containing only the remaining pointer. An app receiver observed no extra events during thousands of protected-strip ghost samples; it received only the ten controlled synthetic test events. A later short physical test delivered both single-finger and two-finger gestures with no injection failures, protected-area breaches, or stream anomalies. Simultaneous physical ghost contacts and good fingers were not present in that test; the host stress tests cover that combination. These observations do not establish long-term reliability. The 0.9 captures verified notification cards and navigation spacing in portrait and both landscape directions; its backend and layout are unchanged in 0.10. See [EXPERIMENT.md](EXPERIMENT.md) and [VERIFICATION.md](VERIFICATION.md) for evidence and limits.
 
 The filter rejects a contact reported inside the protected strip for its entire gesture, including batched samples, and forwards accepted coordinates unchanged. It cannot identify a hardware-generated ghost touch reported outside the strip.
 
@@ -46,12 +48,13 @@ The app has no network permission and does not save or transmit touch events. Th
 
 ## Development
 
-Build `source/build.ps1` with JDK 17, Android platform 36, Build Tools 36, and R8. Run all three host suites:
+Build `source/build.ps1` with JDK 17, Android platform 36, Build Tools 36, and R8. Run all four host suites:
 
 ```text
 python tests/host_checks.py --jdk <JDK-folder>
 python tests/backend_checks.py --jdk <JDK-folder>
 python tests/shade_checks.py --jdk <JDK-folder>
+python tests/embedded_checks.py --jdk <JDK-folder>
 ```
 
 The gesture suite covers protected/mixed contacts, ghost-only changes while a good finger remains down, pressure and other axes, batched history, cancellation after POINTER_UP, lifecycle recovery, injection flags, and stale-input cancellation. Controller checks cover a non-drawing status area, rapid reversals, shade-only geometry/insets, visibility updates, failed-apply retry, and restoration. Shade checks cover translated/clipped navigation frames in all four rotations and stable source ownership. Host checks do not establish Samsung rendering or physical touch responsiveness.

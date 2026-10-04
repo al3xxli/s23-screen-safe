@@ -146,6 +146,31 @@ public final class ScreenSafeBackend {
         System.out.println(okay?"RESTORED":"RESTORE_ERROR"); System.out.flush();
     }
     public static void main(String[] args) {
+        if(args.length==1&&args[0].equals("prepare")){
+            try{
+                if(!android.os.Build.MODEL.equals("SM-S918W"))throw new IllegalStateException("Unsupported phone");
+                if(!command("wm","size").equals("Physical size: 1440x3088"))throw new IllegalStateException("Restore native resolution first");
+                if(stateFile.exists())throw new IllegalStateException("Run Restore Screen before preparation");
+                String display=command("dumpsys","window","displays");
+                if(java.util.regex.Pattern.compile("OneHanded:.*\\(organized\\)|RemoteWallpaperAnim:.*\\(organized\\)").matcher(display).find())
+                    throw new IllegalStateException("Another feature owns the display area");
+                String containers=command("dumpsys","activity","containers");
+                int areas=0,wallpapers=0;
+                for(String line:containers.split("\n")){
+                    if(line.contains("OneHanded:")){areas++;if(!line.contains("requested-bounds=[0,0][0,0]"))throw new IllegalStateException("Unexpected area bounds");}
+                    if(line.contains("RemoteWallpaperAnim:")){wallpapers++;if(!line.contains("requested-bounds=[0,0][0,0]"))throw new IllegalStateException("Unexpected wallpaper bounds");}
+                }
+                if(areas!=8||wallpapers!=1)throw new IllegalStateException("Unexpected display-area count");
+                String rotation=command("wm","user-rotation");
+                if(!rotation.matches("free|lock [0-3]"))throw new IllegalStateException("Unexpected rotation state");
+                // A failed/partial write remains a recovery marker instead of permitting activation.
+                try(FileOutputStream stream=new FileOutputStream(stateFile)){
+                    stream.write((rotation+"\nadaptive-v1\n").getBytes("UTF-8"));stream.getFD().sync();
+                }
+                System.out.println("PREPARED");System.out.flush();System.exit(0);
+            }catch(Throwable error){System.out.println("ERROR: "+error);error.printStackTrace(System.out);System.exit(1);}
+            return;
+        }
         int exitCode=0;
         try {
             boolean recovering=args.length==1 && args[0].equals("recover");
