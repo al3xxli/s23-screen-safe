@@ -1,5 +1,13 @@
 # Screen Safe 0.10 preview verification — October 3, 2026
 
+## Session-loss recovery — October 4, 2026
+
+- Captured the reported upward shift before restarting. The instrumentation launcher and backend were absent, all Screen Safe display areas had lost organizer ownership, and the filter reported `active=false` with one failure. The guard remained visible.
+- NotificationShade retained local bounds `(0,0)-(1440,2470)`, but its surface offset had reverted to zero. That explains the 618-pixel upward shift of both notifications and the lock-screen clock. Other app areas retained their physical bounds. This capture did not show a geometry reset while the controller was alive.
+- USB was `rndis,adb` with tethering active. USB mode changes are a known session-lifetime risk on this phone, but the original process-exit log was no longer available, so the exact trigger of this exit was not established.
+- With the user's approval, reset both the screen-unlocked USB functions and current functions to charging, then recovered stale bounds and reactivated the existing 0.10 build. USB was verified as `sec_charging,adb`; the launcher was detached with parent PID 1; the backend and touch filter were active with zero new forwarding failures.
+- A settled capture confirmed the full notification header, cards, and footer at the correct physical offset, and SurfaceFlinger reported the shared shade container translated by 618 pixels again. A separate physical lock-screen clock check was requested. No APK, backend, or geometry code was changed for this recovery.
+
 ## Ghost-contact and cancellation findings
 
 - The user observed blocked-region ghost contacts with the Samsung accessibility menu while Maps was unresponsive. The original Maps failure was not captured. The accessibility display alone does not prove the foreground app received or remapped those contacts.

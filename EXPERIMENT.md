@@ -1,5 +1,11 @@
 # Adaptive layout and touch investigation
 
+## Session-loss recovery — October 4, 2026
+
+The notification panel and lock-screen clock shifted upward together after ordinary use. Capture before reactivation showed that the instrumentation launcher and backend had exited, organizer ownership was gone, and touch filtering was inactive with one failure. The black guard and display-area bounds remained. Because the shared notification/keyguard area uses local bounds, loss of its separately maintained surface offset placed it at y=0 instead of y=618; other app areas retained their physical origins.
+
+USB tethering (`rndis,adb`) was active when inspected. The original exit stack was no longer present in the available logs; do not claim this capture alone establishes the exact reason for the process exit. The user authorized returning to charging. Resetting screen-unlocked/current USB functions and reactivating the existing 0.10 build restored organizer ownership, the 618-pixel shade translation, and active touch filtering. A settled notification capture fit correctly. This was operational recovery, with no new geometry or APK changes; USB/session lifetime remains a limitation.
+
 
 ## Current status: 0.10, ghost-contact traffic and invalid cancellation — October 3, 2026
 
