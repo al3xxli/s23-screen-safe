@@ -26,30 +26,42 @@ stubs = {
 'android/view/InputEvent.java': '''package android.view; public class InputEvent {}''',
 'android/view/MotionEvent.java': '''package android.view;
 public class MotionEvent extends InputEvent {
- public static final int ACTION_DOWN=0,ACTION_UP=1,ACTION_MOVE=2,ACTION_CANCEL=3,ACTION_POINTER_DOWN=5,ACTION_POINTER_UP=6,TOOL_TYPE_FINGER=1;
+ public static final int ACTION_DOWN=0,ACTION_UP=1,ACTION_MOVE=2,ACTION_CANCEL=3,ACTION_POINTER_DOWN=5,ACTION_POINTER_UP=6,TOOL_TYPE_FINGER=1,FLAG_CANCELED=32;
  public static class PointerProperties {public int id,toolType;}
- public static class PointerCoords {public float x,y,pressure,size;}
- private java.util.ArrayList<PointerCoords[]> history=new java.util.ArrayList<>(); private long down,time; private int action; private PointerProperties[] props;private PointerCoords[] coords;
- public static MotionEvent obtain(long d,long t,int a,int n,PointerProperties[] p,PointerCoords[] c,int meta,int buttons,float xp,float yp,int device,int edge,int source,int flags){
-  MotionEvent e=new MotionEvent();e.down=d;e.time=t;e.action=a;e.props=new PointerProperties[n];e.coords=new PointerCoords[n];
-  for(int i=0;i<n;i++){e.props[i]=new PointerProperties();e.props[i].id=p[i].id;e.props[i].toolType=p[i].toolType;e.coords[i]=new PointerCoords();e.coords[i].x=c[i].x;e.coords[i].y=c[i].y;e.coords[i].pressure=c[i].pressure;e.coords[i].size=c[i].size;}return e;
+ public static class PointerCoords {
+  public float x,y,pressure,size,touchMajor,touchMinor,toolMajor,toolMinor,orientation;
+  private float[] extra=new float[64];
+  public float getAxisValue(int axis){switch(axis){case 0:return x;case 1:return y;case 2:return pressure;case 3:return size;case 4:return touchMajor;case 5:return touchMinor;case 6:return toolMajor;case 7:return toolMinor;case 8:return orientation;default:return extra[axis];}}
+  public void setAxisValue(int axis,float v){switch(axis){case 0:x=v;break;case 1:y=v;break;case 2:pressure=v;break;case 3:size=v;break;case 4:touchMajor=v;break;case 5:touchMinor=v;break;case 6:toolMajor=v;break;case 7:toolMinor=v;break;case 8:orientation=v;break;default:extra[axis]=v;}}
+  public void copyFrom(PointerCoords c){for(int axis=0;axis<64;axis++)setAxisValue(axis,c.getAxisValue(axis));}
  }
- public static MotionEvent obtain(MotionEvent e){return obtain(e.down,e.time,e.action,e.props.length,e.props,e.coords,0,0,1,1,0,0,4098,0);}
- public int getActionMasked(){return action&255;}public int getActionIndex(){return action>>8;}public void setAction(int a){action=a;}
+ private java.util.ArrayList<PointerCoords[]> history=new java.util.ArrayList<>();
+ private java.util.ArrayList<Long> historyTimes=new java.util.ArrayList<>();
+ private long down,time;private int action,flags,meta,buttons,edge;private float xp,yp;
+ private PointerProperties[] props;private PointerCoords[] coords;
+ private static PointerCoords[] copyCoords(PointerCoords[] c){PointerCoords[] out=new PointerCoords[c.length];for(int i=0;i<c.length;i++){out[i]=new PointerCoords();out[i].copyFrom(c[i]);}return out;}
+ public static MotionEvent obtain(long d,long t,int a,int n,PointerProperties[] p,PointerCoords[] c,int meta,int buttons,float xp,float yp,int device,int edge,int source,int flags){
+  MotionEvent e=new MotionEvent();e.down=d;e.time=t;e.action=a;e.flags=flags|((a&255)==ACTION_CANCEL?FLAG_CANCELED:0);e.meta=meta;e.buttons=buttons;e.xp=xp;e.yp=yp;e.edge=edge;
+  e.props=new PointerProperties[n];for(int i=0;i<n;i++){e.props[i]=new PointerProperties();e.props[i].id=p[i].id;e.props[i].toolType=p[i].toolType;}
+  e.coords=copyCoords(c);return e;
+ }
+ public static MotionEvent obtain(MotionEvent e){MotionEvent out=obtain(e.down,e.time,e.action,e.props.length,e.props,e.coords,e.meta,e.buttons,e.xp,e.yp,0,e.edge,4098,e.flags);for(int h=0;h<e.history.size();h++){out.history.add(copyCoords(e.history.get(h)));out.historyTimes.add(e.historyTimes.get(h));}return out;}
+ public int getActionMasked(){return action&255;}public int getActionIndex(){return action>>8;}public void setAction(int a){action=a;if((a&255)==ACTION_CANCEL)flags|=FLAG_CANCELED;}
  public int getPointerCount(){return props.length;}public int getPointerId(int i){return props[i].id;}public float getY(int i){return coords[i].y;}
  public float getX(int i){return coords[i].x;}public float getHistoricalX(int i,int h){return history.get(h)[i].x;}
  public int getHistorySize(){return history.size();}public float getHistoricalY(int i,int h){return history.get(h)[i].y;}
- public void addBatch(long t,PointerCoords[] c,int meta){history.add(coords);coords=new PointerCoords[c.length];for(int i=0;i<c.length;i++){coords[i]=new PointerCoords();coords[i].x=c[i].x;coords[i].y=c[i].y;coords[i].pressure=c[i].pressure;}time=t;}
- public long getEventTime(){return time;}public long getDownTime(){return down;}
+ public void addBatch(long t,PointerCoords[] c,int meta){history.add(coords);historyTimes.add(time);coords=copyCoords(c);time=t;this.meta=meta;}
+ public long getEventTime(){return time;}public long getDownTime(){return down;}public long getHistoricalEventTime(int h){return historyTimes.get(h);}
  public void getPointerProperties(int i,PointerProperties p){p.id=props[i].id;p.toolType=props[i].toolType;}
- public void getPointerCoords(int i,PointerCoords c){c.x=coords[i].x;c.y=coords[i].y;c.pressure=coords[i].pressure;c.size=coords[i].size;}
- public int getMetaState(){return 0;}public int getButtonState(){return 0;}public float getXPrecision(){return 1;}public float getYPrecision(){return 1;}public int getEdgeFlags(){return 0;}public int getFlags(){return 0;}public void recycle(){}
+ public void getPointerCoords(int i,PointerCoords c){c.copyFrom(coords[i]);}public void getHistoricalPointerCoords(int i,int h,PointerCoords c){c.copyFrom(history.get(h)[i]);}
+ public int getMetaState(){return meta;}public int getButtonState(){return buttons;}public float getXPrecision(){return xp;}public float getYPrecision(){return yp;}public int getEdgeFlags(){return edge;}public int getFlags(){return flags;}public void recycle(){}
 }''',
 'ca/screensafe/app/HostChecks.java': '''package ca.screensafe.app;
 import android.os.Handler;import android.view.MotionEvent;import android.view.InputDevice;
 public class HostChecks {
  static MotionEvent down(){MotionEvent.PointerProperties p=new MotionEvent.PointerProperties();p.id=0;MotionEvent.PointerCoords c=new MotionEvent.PointerCoords();c.y=1500;return MotionEvent.obtain(1,android.os.SystemClock.uptimeMillis(),0,1,new MotionEvent.PointerProperties[]{p},new MotionEvent.PointerCoords[]{c},0,0,1,1,0,0,InputDevice.SOURCE_TOUCHSCREEN,0);}
  public static void main(String[] args){
+  if(args.length>0){System.out.println(TouchFilterChecks.ghostChecks());return;}
   System.out.println(TouchFilterChecks.run());
   SessionRunner.current=new SessionRunner();SessionRunner.current.busy=true;SessionRunner.current.automation=new android.app.UiAutomation();
   TouchFilterService f=TouchFilterChecks.fresh();f.onServiceConnected();Handler.drain();

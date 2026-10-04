@@ -37,15 +37,62 @@ final class TouchFilterChecks {
         MotionEvent e=MotionEvent.obtain(1000,when,action,1,new MotionEvent.PointerProperties[]{p},new MotionEvent.PointerCoords[]{c},0,0,1,1,6,0,InputDevice.SOURCE_TOUCHSCREEN,0);
         try{f.filterCurrent(e);}finally{e.recycle();}
     }
+    static MotionEvent sample(int action,int flags,int[] ids,MotionEvent.PointerCoords[] coords){
+        MotionEvent.PointerProperties[] props=new MotionEvent.PointerProperties[ids.length];
+        for(int i=0;i<ids.length;i++){props[i]=new MotionEvent.PointerProperties();props[i].id=ids[i];props[i].toolType=MotionEvent.TOOL_TYPE_FINGER;}
+        return MotionEvent.obtain(1000,time+=10,action,ids.length,props,coords,0,0,1,1,6,0,InputDevice.SOURCE_TOUCHSCREEN,flags);
+    }
+    static MotionEvent.PointerCoords coord(float x,float y){
+        MotionEvent.PointerCoords c=new MotionEvent.PointerCoords();c.x=x;c.y=y;c.pressure=1;c.size=1;return c;
+    }
+    static void pass(TouchFilterService f,MotionEvent e){try{f.filter(e);}finally{e.recycle();}}
+    static String ghostChecks(){
+        TouchFilterService f=fresh();event(f,0,new int[]{7},1500);
+        event(f,5|(1<<8),new int[]{7,0},1500,100);
+        for(int i=0;i<1000;i++)event(f,2,new int[]{7,0},1500,100+(i%100));
+        event(f,6|(1<<8),new int[]{7,0},1500,199);
+        actions(0);require(f.suppressedStationary==1002,"Ghost-only changes flooded accepted stationary pointer");
+        require(f.mixedSamples==1002&&f.activePointers==1&&f.rejectedPointers==0,"Mixed/contact diagnostics incorrect");
+        event(f,2,new int[]{7},1510);event(f,1,new int[]{7},1510);actions(0,2,1);
+        // Pressure and other axes can change without X/Y movement.
+        f=fresh();MotionEvent.PointerCoords real=coord(700,1500),ghost=coord(600,100);
+        pass(f,sample(0,0,new int[]{7},new MotionEvent.PointerCoords[]{real}));
+        pass(f,sample(5|(1<<8),0,new int[]{7,0},new MotionEvent.PointerCoords[]{real,ghost}));actions(0);
+        real.pressure=.5f;pass(f,sample(2,0,new int[]{7,0},new MotionEvent.PointerCoords[]{real,ghost}));actions(0,2);
+        real.setAxisValue(32,12);pass(f,sample(2,0,new int[]{7,0},new MotionEvent.PointerCoords[]{real,ghost}));actions(0,2,2);
+        MotionEvent.PointerCoords delivered=new MotionEvent.PointerCoords();sent.get(2).getPointerCoords(0,delivered);
+        require(delivered.pressure==.5f&&delivered.getAxisValue(32)==12,"Accepted axes changed or were lost");
+        // Preserve a real excursion in history even when the final point is unchanged.
+        real.y=1600;MotionEvent history=sample(2,0,new int[]{7,0},new MotionEvent.PointerCoords[]{real,ghost});
+        long firstTime=history.getEventTime();real.y=1500;history.addBatch(time+=10,new MotionEvent.PointerCoords[]{real,ghost},0);
+        pass(f,history);actions(0,2,2,2);
+        MotionEvent deliveredHistory=sent.get(3);
+        require(deliveredHistory.getHistorySize()==1&&deliveredHistory.getHistoricalY(0,0)==1600&&deliveredHistory.getY(0)==1500,"Accepted MOVE history lost");
+        require(deliveredHistory.getHistoricalEventTime(0)==firstTime&&deliveredHistory.getPointerCount()==1,"Filtered history timing/ghost pointer changed");
+        // CANCEL contains only contacts still logically active after a POINTER_UP.
+        f=fresh();event(f,0,new int[]{0},1500);event(f,5|(1<<8),new int[]{0,1},1500,1800);
+        event(f,6|(1<<8),new int[]{0,1},1500,1800);require(f.activePointers==1,"Released pointer stayed active");
+        f.clearStream();actions(0,5,6,3);
+        MotionEvent cancel=sent.get(3);require(cancel.getPointerCount()==1&&cancel.getPointerId(0)==0,"CANCEL resurrected a released pointer");
+        require((cancel.getFlags()&MotionEvent.FLAG_CANCELED)!=0,"CANCEL flag missing");
+        // Hardware/palm cancellation of the last accepted finger is not a click.
+        f=fresh();ghost=coord(500,100);real=coord(600,1500);
+        pass(f,sample(0,0,new int[]{0},new MotionEvent.PointerCoords[]{ghost}));
+        pass(f,sample(5|(1<<8),0,new int[]{0,7},new MotionEvent.PointerCoords[]{ghost,real}));
+        pass(f,sample(6|(1<<8),MotionEvent.FLAG_CANCELED,new int[]{0,7},new MotionEvent.PointerCoords[]{ghost,real}));actions(0,3);
+        require(f.activePointers==0,"Canceled finger stayed active");
+        event(f,2,new int[]{0},100);event(f,5|(1<<8),new int[]{0,7},100,1700);actions(0,3,0);
+        fresh();return "PASS: ghost flood suppression, real axes/history, active-only cancellation, and hardware-canceled pointer handling.";
+    }
     static String run(){
         TouchFilterService f=fresh();
         event(f,0,new int[]{0},100);event(f,2,new int[]{0},1800);event(f,1,new int[]{0},1800);actions();
         f=fresh();event(f,0,new int[]{0},100);event(f,5|(1<<8),new int[]{0,7},100,1700);
         event(f,2,new int[]{0,7},110,1750);event(f,6,new int[]{0,7},110,1750);event(f,1,new int[]{7},1750);
-        actions(0,2,2,1);for(MotionEvent e:sent){require(e.getPointerCount()==1&&e.getPointerId(0)==7,"Ghost mixed into real gesture");require(e.getDownTime()==1020+30,"Filtered down time");}
+        actions(0,2,1);for(MotionEvent e:sent){require(e.getPointerCount()==1&&e.getPointerId(0)==7,"Ghost mixed into real gesture");require(e.getDownTime()==1020+30,"Filtered down time");}
         f=fresh();event(f,0,new int[]{0},1500);event(f,5|(1<<8),new int[]{0,3},1500,100);
         event(f,2,new int[]{0,3},1600,130);event(f,6|(1<<8),new int[]{0,3},1600,130);event(f,1,new int[]{0},1600);
-        actions(0,2,2,2,1);for(MotionEvent e:sent)require(e.getPointerCount()==1,"Extra blocked pointer delivered");
+        actions(0,2,1);for(MotionEvent e:sent)require(e.getPointerCount()==1,"Extra blocked pointer delivered");
         f=fresh();event(f,0,new int[]{0},1500);event(f,5|(1<<8),new int[]{0,2},1500,2000);
         event(f,2,new int[]{0,2},1400,2100);event(f,6,new int[]{0,2},1400,2100);event(f,1,new int[]{2},2100);actions(0,5,2,6,1);
         require(sent.get(1).getPointerCount()==2&&sent.get(3).getActionIndex()==0,"Multitouch changed");
@@ -104,6 +151,6 @@ final class TouchFilterChecks {
         f=fresh();currentPoint(f,0,SystemClock.uptimeMillis(),700,1500);
         currentPoint(f,2,SystemClock.uptimeMillis(),700,1800);currentPoint(f,1,SystemClock.uptimeMillis(),700,1800);actions(0,2,1);
         require(f.staleEvents==0,"Gesture downTime incorrectly treated as event age");
-        fresh();return "PASS: filtering, pointer recovery, lifecycle cancellation, all four rotations, stale-input rejection, and fresh touch recovery.";
+        ghostChecks();fresh();return "PASS: filtering, pointer recovery, lifecycle cancellation, all four rotations, stale-input rejection, fresh touch recovery, ghost-flood suppression, active-only cancellation, and canceled-palm handling.";
     }
 }

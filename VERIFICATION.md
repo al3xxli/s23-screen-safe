@@ -1,32 +1,36 @@
-# Screen Safe 0.9 preview verification — October 3, 2026
+# Screen Safe 0.10 preview verification — October 3, 2026
 
-## Notification panel
+## Ghost-contact and cancellation findings
 
-- Reproduced the right-side crop on the connected SM-S918W. The header and quick settings occupied the full width, but notification cards stopped at physical x=822 (1440 minus the 618-pixel protected strip). Window and surface bounds still reported the full usable width.
-- Giving only `OneHanded:17:17` (NotificationShade) local bounds eliminated that crop. Its surface remains positioned in the physical safe viewport. Other app areas and wallpaper retain the previously confirmed geometry.
-- A first local-bounds trial let the footer overlap navigation. The retained correction translates the visible native navigation frame into shade-local coordinates, without shrinking app bounds or adding a global spacer.
-- Final captures show complete notification cards and unobstructed footer controls in portrait and both landscape directions. The first rotation-1 capture caught a collapsed panel; a repeat after settling confirmed its expanded layout. These are settled-layout checks, not a claim of smooth animation.
+- The user observed blocked-region ghost contacts with the Samsung accessibility menu while Maps was unresponsive. The original Maps failure was not captured. The accessibility display alone does not prove the foreground app received or remapped those contacts.
+- A host reproduction showed the previous filter forwarding 1,002 redundant MOVE events after one accepted DOWN when only blocked ghost contacts changed. The updated filter suppresses all 1,002, while retaining real accepted-pointer movement, pressure, other axes, and batched history.
+- A controlled test on the connected SM-S918W exercised the actual Android input dispatcher, using untargeted `InputManagerGlobal` injection into the explicitly opened diagnostic touchpad. DOWN 0, POINTER_DOWN 1, and POINTER_UP 1 were accepted. Old-style CANCEL `{0,1}` was rejected, and fresh DOWN 2 was rejected. CANCEL `{0}` was accepted and recovered the stream. A separate corrected sequence accepted CANCEL `{3}` and then fresh DOWN 5.
+- That test establishes an invalid-cancellation path that can leave subsequent gestures rejected. The production fix builds CANCEL from only the accepted pointers still down, rather than retaining a pointer that already lifted. Samsung automatically adds `FLAG_CANCELED` to injected cancellation; a missing cancellation flag was not the cause.
+- A raw physical-input snapshot placed a ghost at y=205, within the protected 618-pixel region. During thousands of protected ghost samples, the app receiver saw no additional input beyond the ten controlled synthetic test events. Those events had device ID -1, no raw-coordinate SafeArea violations, and no stream anomalies. No ghost-coordinate remapping was observed in that receiver test.
+- A later short physical test delivered single-finger and two-finger gestures to the final 0.10 touchpad. Filter telemetry recorded 645 raw events, 635 forwarded events, zero failures, zero stale events, no queued backlog, and a maximum injection time of 41 ms. The app received 349 events after batching, two DOWN/UP pairs, one POINTER_DOWN/POINTER_UP pair, a maximum of two pointers, device IDs `[-1]`, and no active pointers left afterward. It reported no SafeArea breaches or stream anomalies; maximum event age was 93 ms. `mixedSamples=0` and `suppressedStationary=0`, so simultaneous physical ghosts and good fingers were not exercised in that short test.
+- These results verify specific mechanisms and checkpoint behavior. They do not establish that every reported ordinary-use freeze is eliminated, nor substitute for a capture during the original Maps failure.
 
-## Touch responsiveness
+## Diagnostics and retained touch behavior
 
-- The user reports freezes during ordinary use, sometimes requiring multiple power-button lock/unlock cycles. A frozen moment was not captured during this investigation. The initial 0.8 service was alive with zero reported injection failures; that does not establish that all physical input was working.
-- Source inspection found that the two-argument `UiAutomation.injectInputEvent(event, false)` still waits for animations. The retained implementation resolves the three-argument overload before capture starts and passes `false, false`, removing that wait for normal events and cancellation. The launchers permit this hidden API only in the instrumentation process.
-- Events older than 500 ms are discarded. An accepted interrupted gesture is canceled using the current timestamp, orphan moves cannot synthesize a click, and a fresh DOWN can recover. Fresh samples from long-held gestures are accepted normally.
-- Dumps now report queued/stale events and maximum queue/injection duration. The observed final run processed protected-strip samples with no forwarding failures and no queued backlog. No accepted physical touches had been observed at this checkpoint, so actual injection latency and elimination of the intermittent freeze are **not yet verified**.
-- Android still synchronizes input-window metadata during injection. Removing the animation wait does not guarantee that every system-level input stall is impossible.
+- The filter dump now includes `rawEvents`, `mixedSamples`, `suppressedStationary`, active/rejected pointer counts, `maxPhysicalPointers`, `maxQueued`, and cancellation/recovery causes, alongside the existing stale-event and injection-latency telemetry.
+- `TouchProbeActivity` is launched explicitly with ADB and has no home-screen launcher entry. It consumes app-delivered touches and displays received fingers plus the filter's blocked-sample count. Its in-memory dump includes event counts, current pointer IDs, devices, maximum event age, SafeArea breaches, stream anomalies, and 30 coordinate-free summaries. It does not inject input, persist touch data, or use the network.
+- The 0.9 forwarding changes remain: three-argument `UiAutomation` injection with both waiting flags false, process-scoped hidden API access, and cancellation/discard of events older than 500 ms. Fresh samples from long-held gestures remain valid. Android still synchronizes input-window metadata, so removing animation waits does not exclude every system-level stall.
 
-## Checks and restoration
+## Checks and deployment
 
-- All three host suites passed: gesture/lifecycle/injection-flag/stale-event recovery; direct controller rotation updates and shade-only geometry/inset lifecycle; translated/clipped native navigation frames in all four rotations.
-- The installed 0.9 APK passed on-device generated-event checks: filtering, pointer recovery, lifecycle cancellation, all four masks, stale-input rejection, and fresh-contact recovery. These use a test sink and do not inject actions into other apps.
-- Java compilation against Android 36, DEX conversion, APK alignment, signing, and signature verification passed for `0.9-preview` / code 9.
-- Restore cleared requested bounds from all eight OneHanded areas and the wallpaper child. The owned shade inset is explicitly removed during graceful restoration and has Binder-death cleanup; the host suite verifies explicit removal. Protection was then reactivated without a timer.
-- Controlled notification-panel rotations restored the current user preferences, `free` / fixed-to-user-rotation `default`. USB remains `sec_charging,adb`; no USB setting was changed. The earlier user-confirmed disconnect workaround is retained.
+- The host gesture/lifecycle suite passed for 0.10, including injection/stale-event cases, ghost-only traffic, history preservation, and active-pointer cancellation regressions. The unchanged controller and shade suites passed at the 0.9 checkpoint; they cover rotation, shade-only geometry/inset lifecycle, and translated/clipped native navigation frames in all four rotations.
+- Production sources compile against Android 36 for `0.10-preview` / code 10. The final build passed on-device generated-event checks, including the new ghost-traffic and pointer-cancellation cases. Those checks use a test sink and are distinct from the actual native-dispatcher reproduction described above.
+- Version 0.10 / code 10 is installed with protection active and no timeout. The short physical single-finger and two-finger checks above passed; extended ordinary-use and Maps reliability remain unverified.
+- No backend/layout changes were made for 0.10. Its backend DEX is unchanged from the 0.9 build. The prior graceful-restore check cleared all eight OneHanded areas and the wallpaper child; shade-source removal remains covered by host checks.
+- The shell regression source is retained at `tests/StreamInjectionProbe.java`, with a foreground-receiver guard and cleanup attempt. It is not included in the APK or normal activation. Private execution output remains outside Git.
+- Current rotation preferences remain `lock 0` / fixed-to-user-rotation `default`, with USB `sec_charging,adb`. This investigation did not change rotation or USB settings.
 
-## Preserved behavior and limits
+## Notification panel and preserved layout
 
-The mask remains the natural top 618 pixels. Apps use physical bounds with inherited native insets, and the wallpaper child retains full display dimensions at its parent's physical origin. Only the notification-shade area uses local bounds and its corresponding local navigation source. The 0.8 correction that avoids a five-second hidden-status-bar redraw wait is retained.
+The 0.9 phone investigation reproduced cards ending at physical x=822 while the panel header occupied the full width. Giving only `OneHanded:17:17` local bounds corrected that crop, with its surface still at the physical protected viewport origin. A shade-only translated native navigation inset corrected footer overlap without shrinking app bounds or adding a global spacer. Settled captures then verified complete cards and unobstructed footer controls in portrait and both landscape directions. These are retained prior-version checks, not new 0.10 animation tests.
 
-**Harsh rotation blink remains unresolved.** Physical touch confirmation, long-term reliability/power use, all third-party app layouts, and reverse-portrait device navigation remain unverified. The filter cannot distinguish ghost contacts that hardware reports outside the protected strip.
+The mask remains the natural top 618 pixels. Other app areas keep physical bounds and native insets; the wallpaper child retains native display dimensions. The 0.8 correction avoiding a five-second hidden-status-bar redraw wait, untimed activation, and the user-confirmed charging USB disconnect workaround remain unchanged.
 
-Private phone screenshots, logs, notification contents, and signing material remain outside Git. No notification action, call control, Camera shutter, or Camera recording was triggered.
+**Harsh rotation blink remains unresolved.** Long-term touch reliability/power use, all third-party app layouts, and reverse-portrait device navigation remain unverified. The filter cannot distinguish ghost contacts that hardware reports outside the protected strip.
+
+Private phone captures, logs, notification contents, native-probe output, and signing material remain outside Git. The diagnostic tests did not perform notification actions, call controls, Camera shutter actions, or Camera recording.

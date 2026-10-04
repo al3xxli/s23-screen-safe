@@ -1,4 +1,4 @@
-<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="ca.screensafe.app" android:versionCode="9" android:versionName="0.9-preview">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="ca.screensafe.app" android:versionCode="10" android:versionName="0.10-preview">
   <uses-sdk android:minSdkVersion="36" android:targetSdkVersion="36" />
   <instrumentation android:name=".SessionRunner" android:targetPackage="ca.screensafe.app" android:label="Screen Safe USB activation" />
   <application android:label="Screen Safe" android:theme="@android:style/Theme.Material.NoActionBar" android:allowBackup="false">
@@ -9,5 +9,6 @@
     <activity android:name=".MainActivity" android:exported="true">
       <intent-filter><action android:name="android.intent.action.MAIN"/><category android:name="android.intent.category.LAUNCHER"/></intent-filter>
     </activity>
+    <activity android:name=".TouchProbeActivity" android:exported="true" android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout" />
   </application>
 </manifest>

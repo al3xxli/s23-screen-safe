@@ -42,6 +42,9 @@ public final class TouchFilterService extends AccessibilityService {
     static final long MAX_EVENT_AGE_MS=500;
     private final AtomicInteger queued=new AtomicInteger();
     public volatile long staleEvents,maxQueueDelayMs,maxInjectionMs;
+    public volatile long rawEvents,mixedSamples,suppressedStationary,cancelledStreams;
+    public volatile long unsafeCrossings,missingPointers,reusedPointers,hardwareCancels;
+    public volatile int activePointers,rejectedPointers,maxPhysicalPointers,maxQueued;
     private boolean receiving;
     private final BroadcastReceiver screenState=new BroadcastReceiver(){
         public void onReceive(Context context,Intent intent){
@@ -91,6 +94,9 @@ public final class TouchFilterService extends AccessibilityService {
         worker.post(new Runnable(){public void run(){reset();injector=automation;injectWithoutAnimationWait=nonWaiting;}});
         blocked=forwarded=failures=recoveries=0;
         staleEvents=maxQueueDelayMs=maxInjectionMs=0;
+        rawEvents=mixedSamples=suppressedStationary=cancelledStreams=0;
+        unsafeCrossings=missingPointers=reusedPointers=hardwareCancels=0;
+        activePointers=rejectedPointers=maxPhysicalPointers=maxQueued=0;
         filtering=true;configure(true);
     }
     public void disable(){
@@ -120,9 +126,11 @@ public final class TouchFilterService extends AccessibilityService {
     }
     public void onMotionEvent(MotionEvent event){
         if(!filtering)return;
+        rawEvents++;
+        maxPhysicalPointers=Math.max(maxPhysicalPointers,event.getPointerCount());
         final MotionEvent copy=MotionEvent.obtain(event);
         final int epoch=generation;
-        queued.incrementAndGet();
+        maxQueued=Math.max(maxQueued,queued.incrementAndGet());
         boolean posted=worker.post(new Runnable(){public void run(){
             try{if(filtering&&epoch==generation)filterCurrent(copy);}catch(Throwable error){
                 failures++;android.util.Log.e("ScreenSafeFilter","Touch forwarding failed",error);
@@ -151,16 +159,20 @@ public final class TouchFilterService extends AccessibilityService {
         return false;
     }
     void filter(MotionEvent e){
+        try{filterStream(e);}finally{activePointers=allowed.size();rejectedPointers=rejected.size();}
+    }
+    private void filterStream(MotionEvent e){
         int action=e.getActionMasked(), index=e.getActionIndex();
+        if(action==MotionEvent.ACTION_POINTER_UP&&(e.getFlags()&MotionEvent.FLAG_CANCELED)!=0)hardwareCancels++;
         if(action==MotionEvent.ACTION_DOWN){try{cancel();}finally{reset();}}
-        if(action==MotionEvent.ACTION_CANCEL){try{cancel();}finally{reset();}return;}
+        if(action==MotionEvent.ACTION_CANCEL){hardwareCancels++;try{cancel();}finally{reset();}return;}
         if(action!=MotionEvent.ACTION_DOWN && action!=MotionEvent.ACTION_POINTER_DOWN &&
            action!=MotionEvent.ACTION_MOVE && action!=MotionEvent.ACTION_UP && action!=MotionEvent.ACTION_POINTER_UP)return;
         HashSet<Integer> present=new HashSet<>();
         for(int i=0;i<e.getPointerCount();i++)present.add(e.getPointerId(i));
         // Recover a missing POINTER_UP without emitting an invalid multitouch stream.
         if(!present.containsAll(allowed)){
-            clearStream();
+            missingPointers++;clearStream();
             // Existing contacts need a fresh DOWN; do not synthesize a click from MOVE.
             rejected.addAll(present);
         }
@@ -169,7 +181,7 @@ public final class TouchFilterService extends AccessibilityService {
             int id=e.getPointerId(index);
             // A DOWN is authoritative: this ID may belong to a new contact after a lost UP.
             if(allowed.contains(id)){
-                clearStream();rejected.addAll(present);
+                reusedPointers++;clearStream();rejected.addAll(present);
             }
             rejected.remove(id);
         }
@@ -177,7 +189,7 @@ public final class TouchFilterService extends AccessibilityService {
         // If an accepted contact enters the strip, cancel its current gesture, never click it.
         boolean crossing=false;
         for(int i=0;i<e.getPointerCount();i++)if(allowed.contains(e.getPointerId(i))&&unsafe(e,i))crossing=true;
-        if(crossing){try{cancel();}finally{rejected.addAll(allowed);allowed.clear();if(last!=null){last.recycle();last=null;}}}
+        if(crossing){unsafeCrossings++;try{cancel();}finally{rejected.addAll(allowed);allowed.clear();if(last!=null){last.recycle();last=null;}}}
         if(action==MotionEvent.ACTION_DOWN||action==MotionEvent.ACTION_POINTER_DOWN){
             int id=e.getPointerId(index);
             if(unsafe(e,index)){rejected.add(id);blocked++;}
@@ -189,27 +201,76 @@ public final class TouchFilterService extends AccessibilityService {
             else blocked++;
         }
         if(!indices.isEmpty()){
+            boolean mixed=indices.size()<e.getPointerCount();
+            if(mixed)mixedSamples++;
             int newAction=MotionEvent.ACTION_MOVE;
             int newIndex=indices.indexOf(index);
             if((action==MotionEvent.ACTION_DOWN||action==MotionEvent.ACTION_POINTER_DOWN)&&newIndex>=0)
                 newAction=indices.size()==1?MotionEvent.ACTION_DOWN:MotionEvent.ACTION_POINTER_DOWN|(newIndex<<8);
             else if((action==MotionEvent.ACTION_UP||action==MotionEvent.ACTION_POINTER_UP)&&newIndex>=0)
-                newAction=indices.size()==1?MotionEvent.ACTION_UP:MotionEvent.ACTION_POINTER_UP|(newIndex<<8);
+                newAction=indices.size()==1?
+                        ((e.getFlags()&MotionEvent.FLAG_CANCELED)!=0?MotionEvent.ACTION_CANCEL:MotionEvent.ACTION_UP):
+                        MotionEvent.ACTION_POINTER_UP|(newIndex<<8);
             MotionEvent.PointerProperties[] props=new MotionEvent.PointerProperties[indices.size()];
             MotionEvent.PointerCoords[] coords=new MotionEvent.PointerCoords[indices.size()];
             for(int j=0;j<indices.size();j++){
                 props[j]=new MotionEvent.PointerProperties();e.getPointerProperties(indices.get(j),props[j]);
                 coords[j]=new MotionEvent.PointerCoords();e.getPointerCoords(indices.get(j),coords[j]);
             }
-            MotionEvent out=MotionEvent.obtain(downTime,e.getEventTime(),newAction,indices.size(),props,coords,
-                    e.getMetaState(),e.getButtonState(),e.getXPrecision(),e.getYPrecision(),0,e.getEdgeFlags(),InputDevice.SOURCE_TOUCHSCREEN,e.getFlags());
-            try{inject(out);if(last!=null)last.recycle();last=MotionEvent.obtain(out);}finally{out.recycle();}
+            // A damaged contact can report thousands of samples while an accepted
+            // finger is stationary. Do not turn that noise into an app MOVE flood.
+            // Only mixed streams qualify; keep real movement, every axis and history.
+            boolean stationary=newAction==MotionEvent.ACTION_MOVE&&mixed&&unchanged(e,indices);
+            if(stationary)suppressedStationary++;
+            else{
+                int history=newAction==MotionEvent.ACTION_MOVE?e.getHistorySize():0;
+                if(history>0)for(int j=0;j<indices.size();j++)e.getHistoricalPointerCoords(indices.get(j),0,coords[j]);
+                MotionEvent out=MotionEvent.obtain(downTime,history>0?e.getHistoricalEventTime(0):e.getEventTime(),newAction,indices.size(),props,coords,
+                        e.getMetaState(),e.getButtonState(),e.getXPrecision(),e.getYPrecision(),0,e.getEdgeFlags(),InputDevice.SOURCE_TOUCHSCREEN,e.getFlags());
+                try{
+                    for(int h=1;h<history;h++){
+                        for(int j=0;j<indices.size();j++)e.getHistoricalPointerCoords(indices.get(j),h,coords[j]);
+                        out.addBatch(e.getHistoricalEventTime(h),coords,e.getMetaState());
+                    }
+                    if(history>0){
+                        for(int j=0;j<indices.size();j++)e.getPointerCoords(indices.get(j),coords[j]);
+                        out.addBatch(e.getEventTime(),coords,e.getMetaState());
+                    }
+                    inject(out);if(last!=null)last.recycle();last=MotionEvent.obtain(out);
+                }finally{out.recycle();}
+            }
         }
         if(action==MotionEvent.ACTION_UP||action==MotionEvent.ACTION_POINTER_UP){
             int id=e.getPointerId(index);allowed.remove(id);rejected.remove(id);
             if(allowed.isEmpty()&&last!=null){last.recycle();last=null;}
         }
         if(action==MotionEvent.ACTION_UP)reset();
+    }
+    private boolean unchanged(MotionEvent e,ArrayList<Integer> indices){
+        if(last==null||e.getMetaState()!=last.getMetaState()||e.getButtonState()!=last.getButtonState())return false;
+        // FLAG_CANCELED can describe a rejected POINTER_UP; it does not cancel
+        // the surviving accepted pointer. Other flag changes are preserved.
+        if(((e.getFlags()^last.getFlags())&~MotionEvent.FLAG_CANCELED)!=0)return false;
+        MotionEvent.PointerCoords before=new MotionEvent.PointerCoords(),now=new MotionEvent.PointerCoords();
+        MotionEvent.PointerProperties beforeProp=new MotionEvent.PointerProperties(),nowProp=new MotionEvent.PointerProperties();
+        for(int index:indices){
+            int previous=-1;
+            for(int p=0;p<last.getPointerCount();p++)if(last.getPointerId(p)==e.getPointerId(index)){previous=p;break;}
+            if(previous<0)return false;
+            last.getPointerProperties(previous,beforeProp);e.getPointerProperties(index,nowProp);
+            if(beforeProp.toolType!=nowProp.toolType)return false;
+            last.getPointerCoords(previous,before);e.getPointerCoords(index,now);
+            if(!sameAxes(before,now))return false;
+            for(int h=0;h<e.getHistorySize();h++){
+                e.getHistoricalPointerCoords(index,h,now);
+                if(!sameAxes(before,now))return false;
+            }
+        }
+        return true;
+    }
+    private static boolean sameAxes(MotionEvent.PointerCoords a,MotionEvent.PointerCoords b){
+        for(int axis=0;axis<64;axis++)if(a.getAxisValue(axis)!=b.getAxisValue(axis))return false;
+        return true;
     }
     private void inject(MotionEvent e){
         if(testSink!=null){testSink.send(e);return;}
@@ -224,28 +285,34 @@ public final class TouchFilterService extends AccessibilityService {
         forwarded++;
     }
     private void cancel(){
-        if(last!=null && last.getActionMasked()!=MotionEvent.ACTION_UP){
+        if(last!=null && !allowed.isEmpty() && last.getActionMasked()!=MotionEvent.ACTION_UP && last.getActionMasked()!=MotionEvent.ACTION_CANCEL){
             // A held/stalled stream can have an old last sample. Timestamp cleanup
             // now rather than replaying the interrupted contact's old event time.
-            int count=last.getPointerCount();
+            ArrayList<Integer> live=new ArrayList<>();
+            for(int i=0;i<last.getPointerCount();i++)if(allowed.contains(last.getPointerId(i)))live.add(i);
+            int count=live.size();
+            if(count==0)return;
             MotionEvent.PointerProperties[] props=new MotionEvent.PointerProperties[count];
             MotionEvent.PointerCoords[] coords=new MotionEvent.PointerCoords[count];
             for(int i=0;i<count;i++){
-                props[i]=new MotionEvent.PointerProperties();last.getPointerProperties(i,props[i]);
-                coords[i]=new MotionEvent.PointerCoords();last.getPointerCoords(i,coords[i]);
+                props[i]=new MotionEvent.PointerProperties();last.getPointerProperties(live.get(i),props[i]);
+                coords[i]=new MotionEvent.PointerCoords();last.getPointerCoords(live.get(i),coords[i]);
             }
             MotionEvent cancel=MotionEvent.obtain(last.getDownTime(),SystemClock.uptimeMillis(),MotionEvent.ACTION_CANCEL,
                     count,props,coords,last.getMetaState(),last.getButtonState(),last.getXPrecision(),last.getYPrecision(),
-                    0,last.getEdgeFlags(),InputDevice.SOURCE_TOUCHSCREEN,last.getFlags());
-            try{inject(cancel);}finally{cancel.recycle();}
+                    0,last.getEdgeFlags(),InputDevice.SOURCE_TOUCHSCREEN,last.getFlags()|MotionEvent.FLAG_CANCELED);
+            try{inject(cancel);cancelledStreams++;}finally{cancel.recycle();}
         }
     }
-    private void reset(){allowed.clear();rejected.clear();if(last!=null){last.recycle();last=null;}downTime=0;}
+    private void reset(){allowed.clear();rejected.clear();activePointers=rejectedPointers=0;if(last!=null){last.recycle();last=null;}downTime=0;}
     public void onAccessibilityEvent(AccessibilityEvent event){}
     public void onInterrupt(){if(filtering)restartStream();}
     protected void dump(java.io.FileDescriptor fd,java.io.PrintWriter out,String[] args){
         out.println("ScreenSafe touch filter: active="+filtering+" blockedSamples="+blocked+" forwardedEvents="+forwarded+" failures="+failures+" recoveries="+recoveries+" generation="+generation
-                +" queued="+queued.get()+" staleEvents="+staleEvents+" maxQueueDelayMs="+maxQueueDelayMs+" maxInjectionMs="+maxInjectionMs);
+                +" queued="+queued.get()+" staleEvents="+staleEvents+" maxQueueDelayMs="+maxQueueDelayMs+" maxInjectionMs="+maxInjectionMs
+                +" rawEvents="+rawEvents+" mixedSamples="+mixedSamples+" suppressedStationary="+suppressedStationary
+                +" activePointers="+activePointers+" rejectedPointers="+rejectedPointers+" maxPhysicalPointers="+maxPhysicalPointers+" maxQueued="+maxQueued
+                +" cancelledStreams="+cancelledStreams+" unsafeCrossings="+unsafeCrossings+" missingPointers="+missingPointers+" reusedPointers="+reusedPointers+" hardwareCancels="+hardwareCancels);
     }
     public void onDestroy(){if(receiving){unregisterReceiver(screenState);receiving=false;}disable();current=null;if(thread!=null)thread.quitSafely();super.onDestroy();}
 }

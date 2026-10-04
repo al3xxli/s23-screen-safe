@@ -1,6 +1,6 @@
-# Screen Safe 0.9 preview — S23 Ultra
+# Screen Safe 0.10 preview — S23 Ultra
 
-This preview blocks the damaged top **20%** and places apps in the remaining physical screen area. Version 0.9 corrects the reproduced notification-card crop and adds touch recovery changes for the reported intermittent unresponsiveness. Settled portrait and both landscape captures now show complete notification cards and unobstructed footer controls. **The intermittent touch freeze has not been reproduced during this investigation, so its elimination is not yet verified. Rotation blink remains unresolved.**
+This preview blocks the damaged top **20%** and places apps in the remaining physical screen area. Version 0.10 corrects a touch-cancellation defect reproduced in Android's actual input dispatcher and suppresses redundant forwarded moves caused solely by blocked ghost contacts. It retains the notification-panel and navigation-spacing corrections. **The original Maps freeze was not captured, so these findings do not establish that every reported freeze is fixed or that ghost coordinates were being remapped. Rotation blink remains unresolved.**
 
 Tested device: Samsung SM-S918W, Android 16 / One UI 8.5, physical resolution 1440 × 3088. No root is required. The natural top 618 pixels (20%, rounded up) are masked; the interface uses the remaining area. The damaged edge follows rotation. The 0.8 Camera rotation-stall correction and the previously confirmed wallpaper correction are retained.
 
@@ -26,6 +26,9 @@ Developer commands for the tested setting are `adb shell svc usb setScreenUnlock
 
 ## Changes and verification
 
+- Cancel only the accepted pointer IDs that are still down. Previously, cancellation after a finger lifted could include that departed pointer. A controlled test on this phone showed Android rejecting that CANCEL and the next DOWN, leaving navigation stuck until a valid cancellation arrived.
+- Suppress redundant MOVE events when only rejected ghost contacts change and all accepted fingers remain unchanged. A host reproduction generated 1,002 redundant moves after one legitimate DOWN; the updated filter suppresses all 1,002. Real motion, pressure, other axes, metadata changes, and batched history are retained.
+- Report raw events, mixed-contact samples, suppressed stationary moves, active/rejected pointers, maximum physical pointer count, and recovery causes. These distinguish ghost traffic and exhausted or interrupted pointer streams from app-delivered input.
 - Give only Samsung's notification-shade display area local window bounds, while keeping its surface at the protected viewport's physical position. This corrects the reproduced right-side notification-card crop.
 - Mirror the visible native navigation inset into that shade's local coordinates. Remove it when hidden or restoring, and refresh when its frame changes. Other app areas retain physical bounds and native insets; no global spacer or app-bounds shrink is added.
 - Forward touches without waiting for window animations. The prior two-argument `UiAutomation` call waited for animations even with asynchronous injection; Android's input-window synchronization still remains. See the [Android 16 UiAutomation implementation](https://raw.githubusercontent.com/aosp-mirror/platform_frameworks_base/android16-release/core/java/android/app/UiAutomation.java).
@@ -33,11 +36,13 @@ Developer commands for the tested setting are `adb shell svc usb setScreenUnlock
 - Report queued events, discarded stale events, maximum queue delay, and maximum injection time in the service dump to distinguish future input stalls from a dead service.
 - Retain immediate rotation layout updates, native wallpaper dimensions, the 250 ms surface-position/crop maintenance, shared 20% geometry, and interrupted-gesture/service-reconnection recovery.
 
-All three host suites, Android 36 compilation, and APK signature verification passed. Version 0.9 is installed and active on the test phone. Generated-event checks on the phone also passed. Captures verify notification cards and navigation spacing in portrait and both landscape directions; physical user input with this version and long-term touch reliability still need confirmation. The earlier 0.8 Camera tests and user feedback established a usability improvement, not seamless rendering. See [EXPERIMENT.md](EXPERIMENT.md) and [VERIFICATION.md](VERIFICATION.md) for evidence and limits.
+Host gesture/lifecycle checks, Android 36 compilation, and on-device generated-event checks passed for 0.10. The build is installed with protection active and no timeout. The controlled device reproduction verified Android rejecting the old cancellation and accepting cancellation containing only the remaining pointer. An app receiver observed no extra events during thousands of protected-strip ghost samples; it received only the ten controlled synthetic test events. A later short physical test delivered both single-finger and two-finger gestures with no injection failures, protected-area breaches, or stream anomalies. Simultaneous physical ghost contacts and good fingers were not present in that test; the host stress tests cover that combination. These observations do not establish long-term reliability. The 0.9 captures verified notification cards and navigation spacing in portrait and both landscape directions; its backend and layout are unchanged in 0.10. See [EXPERIMENT.md](EXPERIMENT.md) and [VERIFICATION.md](VERIFICATION.md) for evidence and limits.
 
 The filter rejects a contact reported inside the protected strip for its entire gesture, including batched samples, and forwards accepted coordinates unchanged. It cannot identify a hardware-generated ghost touch reported outside the strip.
 
-The app has no network permission and does not save or transmit touch events. Other enabled accessibility services are preserved; touch-exploration services such as TalkBack are not supported concurrently.
+The Samsung accessibility touch display can show contacts before the foreground app receives them. Seeing a ghost contact there does not establish that Maps received or remapped it. The developer receiver below measures delivery to an app directly.
+
+The app has no network permission and does not save or transmit touch events. The optional touch probe keeps current finger circles and up to 30 coordinate-free event summaries in memory; they disappear when its process ends. Other enabled accessibility services are preserved; touch-exploration services such as TalkBack are not supported concurrently.
 
 ## Development
 
@@ -49,8 +54,17 @@ python tests/backend_checks.py --jdk <JDK-folder>
 python tests/shade_checks.py --jdk <JDK-folder>
 ```
 
-The gesture suite covers protected/mixed contacts, batched unsafe samples, lifecycle recovery, injection flags, and stale-input cancellation. Controller checks cover a non-drawing status area, rapid reversals, shade-only geometry/insets, visibility updates, failed-apply retry, and restoration. Shade checks cover translated/clipped navigation frames in all four rotations and stable source ownership. Host checks do not establish Samsung rendering or physical touch responsiveness.
+The gesture suite covers protected/mixed contacts, ghost-only changes while a good finger remains down, pressure and other axes, batched history, cancellation after POINTER_UP, lifecycle recovery, injection flags, and stale-input cancellation. Controller checks cover a non-drawing status area, rapid reversals, shade-only geometry/insets, visibility updates, failed-apply retry, and restoration. Shade checks cover translated/clipped navigation frames in all four rotations and stable source ownership. Host checks do not establish Samsung rendering or physical touch responsiveness.
 
 For on-device generated-event checks, end protection first and run `phone-tools\adb.exe shell am instrument --no-hidden-api-checks -w -r -e test checks ca.screensafe.app/.SessionRunner`, then reactivate. Instrumentation checks replace the active session.
+
+To inspect what reaches an ordinary app window, explicitly launch the diagnostic touchpad and drag or pinch on it:
+
+```text
+phone-tools\adb.exe shell am start -n ca.screensafe.app/.TouchProbeActivity
+phone-tools\adb.exe shell dumpsys activity ca.screensafe.app/.TouchProbeActivity
+```
+
+This activity has no launcher icon and does not inject input or change protection. Its display shows received fingers and the filter's blocked-sample count. The dump reports pointer IDs, devices, event age, protected-area breaches, stream anomalies, and recent coordinate-free summaries. The separate native-dispatcher regression source is retained in `tests/StreamInjectionProbe.java` for advanced investigation; it checks for the diagnostic receiver and attempts cleanup. It is not included in the APK or normal activation.
 
 Work is on `wip/adaptive-rotation`; `main` retains the 0.5 baseline. `SHA256SUMS.txt` covers the APK, backend DEX, and bundled ADB binaries.

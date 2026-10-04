@@ -1,7 +1,40 @@
 # Adaptive layout and touch investigation
 
 
-## Current status: 0.9, notification geometry and touch recovery — October 3, 2026
+## Current status: 0.10, ghost-contact traffic and invalid cancellation — October 3, 2026
+
+The user reported that Maps stopped responding while the Samsung accessibility menu showed ghost contacts in the blocked top 20%. That display is useful evidence of physical contacts, but it does not establish delivery to Maps. The original Maps freeze was not captured. The investigation below reproduced two software defects, including one that demonstrably leaves Android's input dispatcher rejecting fresh gestures.
+
+### Rejected-pointer traffic was creating redundant app moves
+
+The filter already removed rejected pointer IDs and preserved the original physical coordinates of accepted contacts. However, while a legitimate finger was held still, events changing only a blocked ghost contact became MOVE events for that stationary finger. A host reproduction produced 1,002 such forwarded moves after one accepted DOWN. The corrected filter suppresses all 1,002 when every accepted pointer's properties and axes remain unchanged, including historical samples. Actual motion, pressure, other axes, meaningful metadata changes, and batched movement remain forwarded; motion history is preserved when rebuilding the accepted event.
+
+This is unwanted event traffic, not evidence of changing ghost coordinates into safe coordinates. It could burden an app that is interpreting a held gesture, but the host reproduction alone does not prove that it caused the user's Maps freeze.
+
+### Cancellation included a finger that had already lifted
+
+The saved last event could be a POINTER_UP, whose pointer array includes both the lifted finger and the finger still down. The old cancellation copied that complete array even though Android's current stream contained only the remaining finger. A temporary probe exercised the actual input dispatcher through untargeted `InputManagerGlobal` injection, with the explicit diagnostic touchpad as the foreground receiver:
+
+1. DOWN for pointer 0, POINTER_DOWN for pointer 1, then POINTER_UP for pointer 1 were accepted.
+2. The old CANCEL containing `{0,1}` was rejected (`false`). A subsequent fresh DOWN for pointer 2 was also rejected (`false`).
+3. A CANCEL containing only the still-active pointer `{0}` was accepted (`true`) and recovered the stream.
+4. In a separate corrected sequence, CANCEL `{3}` was accepted and a fresh DOWN for pointer 5 was accepted.
+
+This establishes a concrete stuck-gesture mechanism on this phone. The production cancellation now selects only still-accepted pointer IDs from the saved event and uses the current timestamp. It also explicitly marks cancellation, but Samsung already supplies `FLAG_CANCELED` for injected CANCEL events: absence of that flag was not the defect. The controlled reproduction does not prove that every ordinary-use freeze took this path.
+
+### Physical input and app delivery
+
+A raw physical-input snapshot placed a ghost contact at y=205, inside the protected 618-pixel strip. During thousands of protected-strip ghost samples, the diagnostic app receiver obtained no additional events beyond the ten controlled synthetic test events. Those arrived with device ID -1, no raw-coordinate SafeArea breaches, and no stream anomalies. This observation supports filtering at that checkpoint; it does not replace a capture during a real Maps failure.
+
+The service dump now records raw events, mixed samples, suppressed stationary moves, active and rejected pointer counts, maximum physical pointers, maximum queue depth, and cancellation/recovery causes. These provide evidence for a future physical-input or pointer-slot investigation without recording touch coordinates. `TouchProbeActivity` is an explicitly launched app receiver, with no launcher icon. It consumes app-delivered events, draws current finger circles, and keeps only counters plus the latest 30 coordinate-free summaries in memory. It does not inject events, write touch data, or use the network.
+
+Host gesture/lifecycle checks, compilation against Android 36, and the on-device generated-event checks passed for 0.10. The host and device gesture cases include ghost-only movement, pressure and other axes, history preservation, and cancellation after POINTER_UP. The unchanged backend and shade host suites passed at the 0.9 checkpoint. Version 0.10 / code 10 is installed with untimed protection active. Private native-probe output and phone captures remain outside Git. The shell regression source is retained in `tests/StreamInjectionProbe.java`, with a foreground-receiver guard and cleanup attempt; it is not included in the APK or normal activation.
+
+A subsequent short physical touchpad test delivered single-finger and two-finger gestures. The filter recorded 645 raw events and 635 forwarded events, zero injection failures, no stale events, and no queued backlog; maximum observed injection time was 41 ms. The app received 349 events after batching, with two DOWN/UP pairs, one POINTER_DOWN/POINTER_UP pair, a maximum of two pointers, and no remaining active IDs. It reported no SafeArea breaches or stream anomalies and a maximum event age of 93 ms. `mixedSamples` and `suppressedStationary` were zero, so this physical test did not exercise simultaneous ghosts and good fingers; that combination is covered by the host stress cases. These short results do not establish sustained Maps responsiveness.
+
+The backend source and DEX are unchanged from 0.9, preserving the 20% strip, corrected notification width/native navigation spacing, wallpaper geometry, 0.8 Camera stall correction, and untimed activation. Rotation blink remains unresolved. Extended ordinary use is needed to establish whether the reported freezes are eliminated.
+
+## Previous checkpoint: 0.9, notification geometry and touch recovery — October 3, 2026
 
 This section supersedes the earlier checkpoints. Version 0.9 is installed and active on the test phone. It retains the 20% protected strip, 0.8 Camera stall correction, wallpaper correction, and untimed activation. Rotation blink remains unresolved. The reported intermittent unresponsive touch has not been reproduced during this investigation, and no physical user touches have yet validated this version; its elimination is not established.
 
