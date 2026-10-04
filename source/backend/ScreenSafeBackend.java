@@ -5,19 +5,93 @@ import java.util.concurrent.Executor;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.SystemClock;
+import ca.screensafe.core.SafeArea;
 
 /** Shell-side controller for the experimentally verified SM-S918W display areas. */
 public final class ScreenSafeBackend {
-    static final int WIDTH=1440, HEIGHT=3088, PROTECTED_TOP=927;
+    static final int WIDTH=SafeArea.WIDTH, HEIGHT=SafeArea.HEIGHT;
     static Class<?> organizerType, wctType, surfaceType, surfaceTxType, rectType, tokenType;
     static Object organizer;
     static final List<Object> surfaces = new ArrayList<>(), tokens = new ArrayList<>();
+    static Object wallpaperToken,wallpaperSurface,shadeToken;
     static boolean registered, restored, rotationChanged;
     static String originalRotation;
     static volatile boolean stop;
     static volatile long heartbeat;
     static final File stateFile=new File("/data/local/tmp/screensafe-rotation-state");
     static boolean ownsState;
+    static int appliedRotation=-1, appliedDensity=-1;
+    static android.graphics.Rect appliedShadeInsets;
+    static Object displayManager;
+    static void position(Object st,SafeArea area)throws Exception{
+        for(Object s:surfaces){
+            if(s==wallpaperSurface){
+                call(st,"setPosition",new Class<?>[]{surfaceType,float.class,float.class},s,0f,0f);
+                call(st,"setWindowCrop",new Class<?>[]{surfaceType,int.class,int.class},s,0,0);
+                continue;
+            }
+            call(st,"setPosition",new Class<?>[]{surfaceType,float.class,float.class},s,(float)area.left,(float)area.top);
+            call(st,"setWindowCrop",new Class<?>[]{surfaceType,int.class,int.class},s,area.width(),area.height());
+        }
+    }
+    static void maintainPosition()throws Exception{
+        if(restored||appliedRotation<0)return;
+        // System transitions can reset the organized surfaces without a bounds
+        // change. Keep their transforms consistent with the physical WM bounds.
+        Object tx=surfaceTxType.getConstructor().newInstance();
+        try{position(tx,new SafeArea(appliedRotation));call(tx,"apply",new Class<?>[]{});}
+        finally{call(tx,"close",new Class<?>[]{});}
+    }
+
+    static void layout() throws Exception {
+        if(restored)return;
+        Object info=call(displayManager,"getDisplayInfo",new Class<?>[]{int.class},0);
+        // Rotation callbacks can arrive before DisplayInfo has the new dimensions.
+        // Use one coherent display snapshot instead of mixing those two epochs.
+        int rotation=info.getClass().getField("rotation").getInt(info);
+        int density=info.getClass().getField("logicalDensityDpi").getInt(info);
+        SafeArea snapshot=new SafeArea(rotation);
+        if(info.getClass().getField("logicalWidth").getInt(info)!=snapshot.displayWidth
+                ||info.getClass().getField("logicalHeight").getInt(info)!=snapshot.displayHeight)return;
+        android.graphics.Rect shadeInsets=ShadeInsets.read(snapshot);
+        if(shadeInsets==null)return;
+        if(rotation==appliedRotation&&density==appliedDensity&&shadeInsets.equals(appliedShadeInsets))return;
+        final SafeArea area=new SafeArea(rotation);
+        // Android and SurfaceFlinger must agree on the viewport origin. Local (0,0)
+        // configuration plus an independent surface offset loses native bar insets
+        // and snaps back to zero when Android finishes a rotation/app transition.
+        Object bounds=rectType.getConstructor(int.class,int.class,int.class,int.class).newInstance(area.left,area.top,area.right,area.bottom);
+        Object tx=wctType.getConstructor().newInstance();
+        for(int i=0;i<tokens.size();i++){
+            Object token=tokens.get(i);
+            // The wallpaper-only child retains native dimensions. Its shared
+            // OneHanded parent still resizes apps and clips everything to the mask.
+            // Give this child the same origin as its parent so its local position is zero.
+            if(token==wallpaperToken){
+                Object nativeBounds=rectType.getConstructor(int.class,int.class,int.class,int.class).newInstance(area.left,area.top,area.left+area.displayWidth,area.top+area.displayHeight);
+                call(tx,"setBounds",new Class<?>[]{tokenType,rectType},token,nativeBounds);
+                call(tx,"setAppBounds",new Class<?>[]{tokenType,rectType},token,nativeBounds);
+                call(tx,"setScreenSizeDp",new Class<?>[]{tokenType,int.class,int.class},token,area.displayWidth*160/density,area.displayHeight*160/density);
+                continue;
+            }
+            // Samsung's notification stack clips its cards when its configuration
+            // has a nonzero origin. Only this area uses local coordinates; mirror
+            // its native navigation frame locally so the footer still fits.
+            Object windowBounds=token==shadeToken
+                    ?rectType.getConstructor(int.class,int.class,int.class,int.class).newInstance(0,0,area.width(),area.height()):bounds;
+            call(tx,"setBounds",new Class<?>[]{tokenType,rectType},token,windowBounds);
+            call(tx,"setAppBounds",new Class<?>[]{tokenType,rectType},token,null);
+            call(tx,"setScreenSizeDp",new Class<?>[]{tokenType,int.class,int.class},token,area.width()*160/density,area.height()*160/density);
+            call(tx,"setSmallestScreenWidthDp",new Class<?>[]{tokenType,int.class},token,WIDTH*160/density);
+        }
+        ShadeInsets.apply(tx,shadeToken,shadeInsets);
+        // A sync covering all display areas can wait for a hidden status bar to
+        // redraw, blocking subsequent rotations until BLAST's five-second timeout.
+        call(organizer,"applyTransaction",new Class<?>[]{wctType},tx);
+        appliedRotation=rotation;appliedDensity=density;appliedShadeInsets=shadeInsets;
+        maintainPosition();
+        System.out.println("LAYOUT "+area.rotation+" "+area.left+" "+area.top+" "+area.width()+" "+area.height());System.out.flush();
+    }
 
     static Object call(Object target, String name, Class<?>[] types, Object... args) throws Exception {
         try { return target.getClass().getMethod(name, types).invoke(target, args); }
@@ -36,10 +110,17 @@ public final class ScreenSafeBackend {
         if(restored) return;
         restored=true;
         boolean okay=true;
+        try{DisplayBridge.unwatch();}catch(Exception e){okay=false;e.printStackTrace(System.out);}
         try {
             if(!tokens.isEmpty()) {
                 Object tx=wctType.getConstructor().newInstance();
-                for(Object token:tokens) call(tx,"setBounds",new Class<?>[]{tokenType,rectType},token,rectType.getConstructor().newInstance());
+                if(shadeToken!=null)ShadeInsets.remove(tx,shadeToken);
+                for(Object token:tokens){
+                    call(tx,"setBounds",new Class<?>[]{tokenType,rectType},token,rectType.getConstructor().newInstance());
+                    call(tx,"setAppBounds",new Class<?>[]{tokenType,rectType},token,null);
+                    call(tx,"setScreenSizeDp",new Class<?>[]{tokenType,int.class,int.class},token,0,0);
+                    call(tx,"setSmallestScreenWidthDp",new Class<?>[]{tokenType,int.class},token,0);
+                }
                 call(organizer,"applyTransaction",new Class<?>[]{wctType},tx);
             }
         } catch(Exception e) { okay=false; e.printStackTrace(System.out); }
@@ -65,6 +146,31 @@ public final class ScreenSafeBackend {
         System.out.println(okay?"RESTORED":"RESTORE_ERROR"); System.out.flush();
     }
     public static void main(String[] args) {
+        if(args.length==1&&args[0].equals("prepare")){
+            try{
+                if(!android.os.Build.MODEL.equals("SM-S918W"))throw new IllegalStateException("Unsupported phone");
+                if(!command("wm","size").equals("Physical size: 1440x3088"))throw new IllegalStateException("Restore native resolution first");
+                if(stateFile.exists())throw new IllegalStateException("Run Restore Screen before preparation");
+                String display=command("dumpsys","window","displays");
+                if(java.util.regex.Pattern.compile("OneHanded:.*\\(organized\\)|RemoteWallpaperAnim:.*\\(organized\\)").matcher(display).find())
+                    throw new IllegalStateException("Another feature owns the display area");
+                String containers=command("dumpsys","activity","containers");
+                int areas=0,wallpapers=0;
+                for(String line:containers.split("\n")){
+                    if(line.contains("OneHanded:")){areas++;if(!line.contains("requested-bounds=[0,0][0,0]"))throw new IllegalStateException("Unexpected area bounds");}
+                    if(line.contains("RemoteWallpaperAnim:")){wallpapers++;if(!line.contains("requested-bounds=[0,0][0,0]"))throw new IllegalStateException("Unexpected wallpaper bounds");}
+                }
+                if(areas!=8||wallpapers!=1)throw new IllegalStateException("Unexpected display-area count");
+                String rotation=command("wm","user-rotation");
+                if(!rotation.matches("free|lock [0-3]"))throw new IllegalStateException("Unexpected rotation state");
+                // A failed/partial write remains a recovery marker instead of permitting activation.
+                try(FileOutputStream stream=new FileOutputStream(stateFile)){
+                    stream.write((rotation+"\nadaptive-v1\n").getBytes("UTF-8"));stream.getFD().sync();
+                }
+                System.out.println("PREPARED");System.out.flush();System.exit(0);
+            }catch(Throwable error){System.out.println("ERROR: "+error);error.printStackTrace(System.out);System.exit(1);}
+            return;
+        }
         int exitCode=0;
         try {
             boolean recovering=args.length==1 && args[0].equals("recover");
@@ -73,21 +179,34 @@ public final class ScreenSafeBackend {
             if(!command("wm","size").equals("Physical size: 1440x3088")) throw new IllegalStateException("Restore the phone's normal 1440x3088 resolution before enabling.");
             String display=command("dumpsys","window","displays");
             if(java.util.regex.Pattern.compile("OneHanded:.*\\(organized\\)").matcher(display).find()) throw new IllegalStateException("Another feature already controls this display area.");
+            if(java.util.regex.Pattern.compile("RemoteWallpaperAnim:.*\\(organized\\)").matcher(display).find())throw new IllegalStateException("Another feature controls the wallpaper area.");
             String containers=command("dumpsys","activity","containers");
+            for(String line:containers.split("\n"))if(line.contains("RemoteWallpaperAnim:")){
+                boolean empty=line.contains("requested-bounds=[0,0][0,0]");
+                boolean ours=line.contains("requested-bounds=[0,0][1440,3088]")||line.contains("requested-bounds=[0,0][3088,1440]")
+                        ||line.contains("requested-bounds=[0,618][1440,3706]")||line.contains("requested-bounds=[618,0][3706,1440]");
+                if(!empty&&!(recovering&&stateFile.exists()&&ours))throw new IllegalStateException("Unexpected wallpaper display-area bounds.");
+            }
             int count=0;
             for(String line:containers.split("\n")) if(line.contains("OneHanded:")) {
                 count++;
                 boolean empty=line.contains("requested-bounds=[0,0][0,0]");
-                // Permit recovery of the 10%, 20%, and current 30% versions.
-                boolean ours=line.contains("requested-bounds=[0,"+PROTECTED_TOP+"][1440,3088]")
+                // Permit recovery of prior 10/20/30% layouts and both adaptive viewport sizes.
+                boolean ours=line.contains("requested-bounds=[0,927][1440,3088]")
+                        || line.contains("requested-bounds=[927,0][3088,1440]")
+                        || line.contains("requested-bounds=[0,0][1440,2161]")
+                        || line.contains("requested-bounds=[0,0][2161,1440]")
+                        || line.contains("requested-bounds=[0,0][1440,2470]")
+                        || line.contains("requested-bounds=[0,0][2470,1440]")
                         || line.contains("requested-bounds=[0,618][1440,3088]")
+                        || line.contains("requested-bounds=[618,0][3088,1440]")
                         || line.contains("requested-bounds=[0,309][1440,3088]");
                 if(!empty && !(recovering && stateFile.exists() && ours)) throw new IllegalStateException("Unexpected existing display-area bounds.");
             }
             if(count!=8) throw new IllegalStateException("Unrecognized Samsung display layout; expected 8 areas.");
             originalRotation=command("wm","user-rotation");
             if(recovering && stateFile.exists()) {
-                try(BufferedReader r=new BufferedReader(new FileReader(stateFile))){originalRotation=r.readLine();}
+                try(BufferedReader r=new BufferedReader(new FileReader(stateFile))){originalRotation=r.readLine();rotationChanged=!"adaptive-v1".equals(r.readLine());}
                 ownsState=true;
             } else if(!recovering && stateFile.exists()) throw new IllegalStateException("Run Restore Screen first to finish an interrupted session.");
             if(!originalRotation.matches("free|lock [0-3]")) throw new IllegalStateException("Unrecognized rotation state.");
@@ -100,30 +219,41 @@ public final class ScreenSafeBackend {
             organizer=organizerType.getConstructor(Executor.class).newInstance(new Executor(){public void execute(Runnable r){r.run();}});
             Runtime.getRuntime().addShutdownHook(new Thread(new Runnable(){public void run(){restore();}}));
             if(!recovering) {
-                try(FileWriter writer=new FileWriter(stateFile)){writer.write(originalRotation);}
+                try(FileWriter writer=new FileWriter(stateFile)){writer.write(originalRotation+"\nadaptive-v1\n");}
                 ownsState=true;
-                rotationChanged=true; command("wm","user-rotation","lock","0");
-            } else rotationChanged=ownsState;
+            }
             List<?> areas=(List<?>)call(organizer,"registerOrganizer",new Class<?>[]{int.class},3);
             registered=true;
             for(Object area:areas) {
                 Object info=call(area,"getDisplayAreaInfo",new Class<?>[]{});
                 if(info.getClass().getField("displayId").getInt(info)!=0) continue;
-                tokens.add(info.getClass().getField("token").get(info));
-                surfaces.add(call(area,"getLeash",new Class<?>[]{}));
+                Object token=info.getClass().getField("token").get(info);
+                Object leash=call(area,"getLeash",new Class<?>[]{});
+                tokens.add(token);surfaces.add(leash);
+                if(leash.toString().contains("OneHanded:17:17")){
+                    if(shadeToken!=null)throw new IllegalStateException("Duplicate Samsung notification area.");
+                    shadeToken=token;
+                }
             }
             if(tokens.size()!=8) throw new IllegalStateException("Unexpected number of display areas.");
-            if(recovering){restore();System.exit(0);return;}
-            Object tx=wctType.getConstructor().newInstance();
-            Object bounds=rectType.getConstructor(int.class,int.class,int.class,int.class).newInstance(0,PROTECTED_TOP,WIDTH,HEIGHT);
-            for(Object token:tokens) call(tx,"setBounds",new Class<?>[]{tokenType,rectType},token,bounds);
-            call(organizer,"applyTransaction",new Class<?>[]{wctType},tx);
-            Object st=surfaceTxType.getConstructor().newInstance();
-            for(Object s:surfaces) {
-                call(st,"setPosition",new Class<?>[]{surfaceType,float.class,float.class},s,0f,(float)PROTECTED_TOP);
-                call(st,"setWindowCrop",new Class<?>[]{surfaceType,int.class,int.class},s,WIDTH,HEIGHT-PROTECTED_TOP);
+            if(shadeToken==null)throw new IllegalStateException("Unrecognized Samsung notification area.");
+            List<?> wallpaperAreas=(List<?>)call(organizer,"registerOrganizer",new Class<?>[]{int.class},10002);
+            for(Object area:wallpaperAreas){
+                Object info=call(area,"getDisplayAreaInfo",new Class<?>[]{});
+                if(info.getClass().getField("displayId").getInt(info)!=0)continue;
+                Object token=info.getClass().getField("token").get(info);
+                Object leash=call(area,"getLeash",new Class<?>[]{});
+                tokens.add(token);surfaces.add(leash);
+                if(wallpaperToken!=null||!leash.toString().contains("RemoteWallpaperAnim:1:1"))throw new IllegalStateException("Unrecognized Samsung wallpaper area.");
+                wallpaperToken=token;wallpaperSurface=leash;
             }
-            call(st,"apply",new Class<?>[]{}); call(st,"close",new Class<?>[]{});
+            if(recovering){restore();System.exit(0);return;}
+            if(wallpaperToken==null)throw new IllegalStateException("Unrecognized Samsung wallpaper area.");
+            displayManager=Class.forName("android.hardware.display.DisplayManagerGlobal").getMethod("getInstance").invoke(null);
+            DisplayBridge.watch(new DisplayBridge.Rotation(){public void changed(int rotation){
+                if(!restored)try{layout();}catch(Exception error){error.printStackTrace(System.out);stop=true;}
+            }});
+            layout();
             // Deep sleep must not look like a broken connection when the phone wakes.
             heartbeat=SystemClock.uptimeMillis();
             Thread control=new Thread(new Runnable(){ public void run(){
@@ -139,7 +269,10 @@ public final class ScreenSafeBackend {
             final Handler handler=new Handler(Looper.getMainLooper());
             handler.postDelayed(new Runnable(){ public void run(){
                 if(stop || SystemClock.uptimeMillis()-heartbeat>8000) {restore(); System.exit(0);}
-                else handler.postDelayed(this,250);
+                else {
+                    try{layout();maintainPosition();}catch(Exception error){System.out.println("ERROR: Adaptive layout failed "+error);restore();System.exit(1);}
+                    handler.postDelayed(this,250);
+                }
             }},250);
             System.out.println("APPLIED"); System.out.flush();
             Looper.loop();

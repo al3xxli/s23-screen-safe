@@ -1,47 +1,55 @@
-# Version 0.5 verification — October 1, 2026
+# Screen Safe 0.11 preview verification — October 4, 2026
 
-- Production app and backend compiled against Android API 36; APK signature verified.
-- Desktop regression checks passed using the actual TouchFilterService.java and TouchFilterChecks.java with Android API fakes. Covered original filtering behavior, lost pointer-up events, pointer-ID reuse, interrupted-stream recovery, failed cancellation, queued pre-lock input, service reconnect, and disable/enable ordering.
-- No phone connected over ADB. Device instrumentation checks, freeze reproduction, keyboard behavior, real lock/unlock transitions, S Pen, and prolonged operation have not been tested for version 0.5.
-- Changes address confirmed code-state defects; the cause of the user's intermittent freeze remains unconfirmed.
+## App-owned controller and USB tethering — October 4, 2026
 
-## Historical version 0.4 evidence
+- The original detached `am instrument` process and shell backend were both in adbd's cgroup, despite parent PID 1/session detachment. Merely adding foreground priority or Shizuku's no-root launcher would not remove that dependency.
+- A temporary phone probe delegated INJECT_EVENTS, MANAGE_ACTIVITY_TASKS, INTERNAL_SYSTEM_WINDOW, and STATUS_BAR_SERVICE, then killed its shell launcher. The same app PID retained those permission checks and accepted direct synthetic DOWN/UP into the diagnostic touchpad afterward. An empty window transaction was also submitted; the full controller test below supplies the actual geometry evidence.
+- Version 0.11 moves the organizer, native shade insets, surface maintenance, and touch injection into the activated app. Bootstrap also delegates DUMP and PACKAGE_USAGE_STATS, both required for the read-only ActivityManager ownership check, writes a recovery marker, and destroys UiAutomation before protection starts. Ongoing operation makes no UiAutomation or shell-process calls.
+- The first full candidate correctly refused startup when PACKAGE_USAGE_STATS was omitted. Adding that narrow delegated permission made ownership inspection and activation succeed. Diagnostic failure text now distinguishes permission denial from an unexpected display-area count without logging private dump contents.
+- Switching charging to `rndis,adb` restarted adbd and removed the shell launcher. The same app PID 20335 retained all nine organizer areas and active filtering. A subsequent checkpoint recorded 931 blocked samples, 224 forwarded events, zero failures, no queued backlog, and a 29 ms maximum injection time. The user answered **Yes** when asked whether taps/swipes, notifications, and lock/unlock stayed correctly positioned and responsive.
+- The final build also survived `rndis -> charging -> rndis` with the same app PID 24420 and no shell launcher. Using its own UI after those transitions, Restore cleared organizer ownership and disabled capture; Protect reacquired all nine areas and filtering; End restored all nine requested bounds to empty before the app process exited. This verifies in-app start/stop/end without the original launcher, separate from host force-stop recovery.
+- All four host suites passed, including prior gesture/ghost/cancellation cases, direct-input ordering and failure handling, the worker-drain barrier, layout/inset regressions, embedded start/stop/start, failed registration, restoration failure/retry, and maintenance failure callbacks. Android 36 compilation, APK signing verification, and on-device generated-event checks passed. Test-generated events do not establish physical ghost-filter reliability on their own.
+- The final 0.11 build is reactivated without a timeout. USB mode can now change without owning protection's lifetime; the earlier charging-only workaround is superseded for this version. Reboot, force-stop, instrumentation end, or app-process termination still needs computer activation. No network listener, root access, new external app, or wireless-debugging setup was added. Networking throughput, extended doze/ordinary-use reliability, and seamless Camera rotation remain unverified.
 
-# Current rebuild — October 1, 2026
+## Session-loss recovery — October 4, 2026
 
-Recovered source compiled to APK and backend DEX; APK signature verification passed. ADB reported no connected devices. All device results below are historical and were not repeated in this workspace.
+- Captured the reported upward shift before restarting. The instrumentation launcher and backend were absent, all Screen Safe display areas had lost organizer ownership, and the filter reported `active=false` with one failure. The guard remained visible.
+- NotificationShade retained local bounds `(0,0)-(1440,2470)`, but its surface offset had reverted to zero. That explains the 618-pixel upward shift of both notifications and the lock-screen clock. Other app areas retained their physical bounds. This capture did not show a geometry reset while the controller was alive.
+- USB was `rndis,adb` with tethering active. USB mode changes are a known session-lifetime risk on this phone, but the original process-exit log was no longer available, so the exact trigger of this exit was not established.
+- With the user's approval, reset both the screen-unlocked USB functions and current functions to charging, then recovered stale bounds and reactivated the existing 0.10 build. USB was verified as `sec_charging,adb`; the launcher was detached with parent PID 1; the backend and touch filter were active with zero new forwarding failures.
+- A settled capture confirmed the full notification header, cards, and footer at the correct physical offset, and SurfaceFlinger reported the shared shade container translated by 618 pixels again. A separate physical lock-screen clock check was requested. No APK, backend, or geometry code was changed for this recovery.
 
-# Screen Safe 0.4 verification — 2026-09-19
+## Ghost-contact and cancellation findings
 
-Device: Samsung SM-S918W, Android 16 / One UI 8.5; physical display 1440 × 3088; density override 560. Protected top: 927 pixels. Active height: 2161 pixels.
+- The user observed blocked-region ghost contacts with the Samsung accessibility menu while Maps was unresponsive. The original Maps failure was not captured. The accessibility display alone does not prove the foreground app received or remapped those contacts.
+- A host reproduction showed the previous filter forwarding 1,002 redundant MOVE events after one accepted DOWN when only blocked ghost contacts changed. The updated filter suppresses all 1,002, while retaining real accepted-pointer movement, pressure, other axes, and batched history.
+- A controlled test on the connected SM-S918W exercised the actual Android input dispatcher, using untargeted `InputManagerGlobal` injection into the explicitly opened diagnostic touchpad. DOWN 0, POINTER_DOWN 1, and POINTER_UP 1 were accepted. Old-style CANCEL `{0,1}` was rejected, and fresh DOWN 2 was rejected. CANCEL `{0}` was accepted and recovered the stream. A separate corrected sequence accepted CANCEL `{3}` and then fresh DOWN 5.
+- That test establishes an invalid-cancellation path that can leave subsequent gestures rejected. The production fix builds CANCEL from only the accepted pointers still down, rather than retaining a pointer that already lifted. Samsung automatically adds `FLAG_CANCELED` to injected cancellation; a missing cancellation flag was not the cause.
+- A raw physical-input snapshot placed a ghost at y=205, within the protected 618-pixel region. During thousands of protected ghost samples, the app receiver saw no additional input beyond the ten controlled synthetic test events. Those events had device ID -1, no raw-coordinate SafeArea violations, and no stream anomalies. No ghost-coordinate remapping was observed in that receiver test.
+- A later short physical test delivered single-finger and two-finger gestures to the final 0.10 touchpad. Filter telemetry recorded 645 raw events, 635 forwarded events, zero failures, zero stale events, no queued backlog, and a maximum injection time of 41 ms. The app received 349 events after batching, two DOWN/UP pairs, one POINTER_DOWN/POINTER_UP pair, a maximum of two pointers, device IDs `[-1]`, and no active pointers left afterward. It reported no SafeArea breaches or stream anomalies; maximum event age was 93 ms. `mixedSamples=0` and `suppressedStationary=0`, so simultaneous physical ghosts and good fingers were not exercised in that short test.
+- These results verify specific mechanisms and checkpoint behavior. They do not establish that every reported ordinary-use freeze is eliminated, nor substitute for a capture during the original Maps failure.
 
-## Findings and changes
+## Diagnostics and retained touch behavior
 
-At the start, the previous app process was alive and the layout remained shifted, but its controller and touch guard were absent. The app reported "Stopped. Check the screen is restored." All eight display areas were unorganized while their old bounds remained. The cause of the original controller termination is not established. Removing the guard despite failed restoration was a confirmed failure path.
+- The filter dump now includes `rawEvents`, `mixedSamples`, `suppressedStationary`, active/rejected pointer counts, `maxPhysicalPointers`, `maxQueued`, and cancellation/recovery causes, alongside the existing stale-event and injection-latency telemetry.
+- `TouchProbeActivity` is launched explicitly with ADB and has no home-screen launcher entry. It consumes app-delivered touches and displays received fingers plus the filter's blocked-sample count. Its in-memory dump includes event counts, current pointer IDs, devices, maximum event age, SafeArea breaches, stream anomalies, and 30 coordinate-free summaries. It does not inject input, persist touch data, or use the network.
+- The 0.9 forwarding changes remain: three-argument `UiAutomation` injection with both waiting flags false, process-scoped hidden API access, and cancellation/discard of events older than 500 ms. Fresh samples from long-held gestures remain valid. Android still synchronizes input-window metadata, so removing animation waits does not exclude every system-level stall.
 
-Version 0.4 adds an accessibility service that consumes SOURCE_TOUCHSCREEN events before normal dispatch. It removes blocked pointer IDs, forwards only accepted fingers with a consistent down/move/up sequence, rejects blocked-origin contacts until release, and cancels accepted gestures that enter the strip. Forwarding uses UiAutomation input injection; it does not re-enter the physical-input filter on this device. No screen-content access is requested. The overlay remains as a second layer.
+## Checks and deployment
 
-Failed restoration now retains both protections. The controller timeout uses uptime rather than elapsed time so deep sleep does not count as a lost heartbeat. No global battery or security features were disabled. Only Screen Safe's own accessibility service was added; no other accessibility services were enabled at the start.
+- The host gesture/lifecycle suite passed for 0.10, including injection/stale-event cases, ghost-only traffic, history preservation, and active-pointer cancellation regressions. The unchanged controller and shade suites passed at the 0.9 checkpoint; they cover rotation, shade-only geometry/inset lifecycle, and translated/clipped native navigation frames in all four rotations.
+- Production sources compile against Android 36 for `0.10-preview` / code 10. The final build passed on-device generated-event checks, including the new ghost-traffic and pointer-cancellation cases. Those checks use a test sink and are distinct from the actual native-dispatcher reproduction described above.
+- Version 0.10 / code 10 is installed with protection active and no timeout. The short physical single-finger and two-finger checks above passed; extended ordinary-use and Maps reliability remain unverified.
+- No backend/layout changes were made for 0.10. Its backend DEX is unchanged from the 0.9 build. The prior graceful-restore check cleared all eight OneHanded areas and the wallpaper child; shade-source removal remains covered by host checks.
+- The shell regression source is retained at `tests/StreamInjectionProbe.java`, with a foreground-receiver guard and cleanup attempt. It is not included in the APK or normal activation. Private execution output remains outside Git.
+- Current rotation preferences remain `lock 0` / fixed-to-user-rotation `default`, with USB `sec_charging,adb`. This investigation did not change rotation or USB settings.
 
-## Results
+## Notification panel and preserved layout
 
-| Check | Result |
-|---|---|
-| APK | Version 0.4 / code 4 compiled, signed, signature verified, and installed using the original signing key. |
-| Touch-sequence checks | Passed on Android: blocked-origin jump into usable area; ghost-first and real-first simultaneous touches; two accepted fingers; cancellation on boundary crossing; exact 927-pixel boundary. Synthetic events go to a test sink and do not inject into other apps. |
-| Live input filter | Android reported InputFilterEnabled=true. During the user trial, a sample showed 3,801 blocked contact samples, 709 forwarded events, zero forwarding failures. Counts are event samples, not unique taps. |
-| User trial | User confirmed: "Everything works; black-strip touches are ignored" after being asked to scroll/type while touching the black strip with another finger. |
-| Guard | Trusted overlay frame/touchable region [0,0][1440,927], identity transform. |
-| Timed restoration | Trial ended normally; filter disabled, guard removed, all eight areas unorganized, rotation free, saved recovery marker absent. |
-| Failed recovery | Terminated only the Screen Safe controller, temporarily withholding its DEX recovery file. Layout remained shifted, but filter and guard stayed active. A sample showed 2,440 blocked samples and zero forwarding failures during this state. |
-| Retry after failure | Restored the original DEX file and pressed Restore. All requested display-area bounds became empty, rotation returned to free, filter disabled, guard absent, recovery marker removed. |
-| Windows launcher | Activation enables its service and starts protection automatically, then checks active filtering. Other enabled service IDs are retained. |
-| Settings | Density remains 560 and Tap duration flag remains 0, as found. |
+The 0.9 phone investigation reproduced cards ending at physical x=822 while the panel header occupied the full width. Giving only `OneHanded:17:17` local bounds corrected that crop, with its surface still at the physical protected viewport origin. A shade-only translated native navigation inset corrected footer overlap without shrinking app bounds or adding a global spacer. Settled captures then verified complete cards and unobstructed footer controls in portrait and both landscape directions. These are retained prior-version checks, not new 0.10 animation tests.
 
-The filter's system service must be rebound after an instrumentation process restart. The launcher explicitly removes/re-adds only its own service around activation and checks that it bound and started filtering successfully.
+The mask remains the natural top 618 pixels. Other app areas keep physical bounds and native insets; the wallpaper child retains native display dimensions. The 0.8 correction avoiding a five-second hidden-status-bar redraw wait, untimed activation, and the user-confirmed charging USB disconnect workaround remain unchanged.
 
-## Limits
+**Harsh rotation blink remains unresolved.** Long-term touch reliability/power use, all third-party app layouts, and reverse-portrait device navigation remain unverified. The filter cannot distinguish ghost contacts that hardware reports outside the protected strip.
 
-This is software event filtering, not sensor/driver region shutdown. Touchscreen events still exist in the hardware and early OS input stages; they are discarded before window/gesture-monitor dispatch. A faulty contact whose first reported coordinate is below pixel 927 cannot be identified as originating in the damaged strip. Input injection into protected coordinates bypasses the early physical-input filter and is instead caught by the overlay.
-
-Cancellation when an accepted finger enters the strip cancels the current accepted gesture, including other accepted fingers in that gesture; it avoids accidental clicks. Lift and restart. Touch exploration, additional displays, landscape, long-term reliability, lock screens, and every app's treatment of injected events remain unverified or unsupported. Process death removes the filter and overlay; the app cannot promise permanent protection after it is killed. Root and bootloader changes were not used.
+Private phone captures, logs, notification contents, native-probe output, and signing material remain outside Git. The diagnostic tests did not perform notification actions, call controls, Camera shutter actions, or Camera recording.

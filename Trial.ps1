@@ -34,7 +34,7 @@ try {
     if(($taskRecovery -match 'ERROR:|RESTORE_ERROR') -or -not($taskRecovery -match '^RESTORED$')){throw ($taskRecovery -join "`n")}
     if($RestoreOnly){Write-Host 'The full screen is restored. You can disconnect USB.';exit 0}
     Invoke-Phone @('install','-r','--user','0',(Join-Path $PSScriptRoot 'ScreenSafe.apk')) | Out-Null
-    Invoke-Phone @('shell','nohup setsid am instrument --no-hidden-api-checks -w -r -e protect true ca.screensafe.app/.SessionRunner > /data/local/tmp/screensafe-session.log 2>&1 < /dev/null &') | Out-Null
+    Invoke-Phone @('shell','nohup setsid am instrument --no-hidden-api-checks -w -r -e protect true -e test adaptive ca.screensafe.app/.SessionRunner > /data/local/tmp/screensafe-session.log 2>&1 < /dev/null &') | Out-Null
     Start-Sleep -Seconds 3
     # Add only our service, retaining any services the user already has enabled.
     $taskServices=(Invoke-Phone @('shell','settings','get','secure','enabled_accessibility_services') -join '').Trim()
@@ -50,7 +50,7 @@ try {
     if(-not $taskFilterReady){throw 'Protection did not start. Check the status in Screen Safe. Its touch filter may need enabling in Accessibility settings.'}
     $taskLog=Invoke-Phone @('shell','cat','/data/local/tmp/screensafe-session.log')
     if($taskLog -match 'error=|Process crashed|INSTRUMENTATION_FAILED'){throw ($taskLog -join "`n")}
-    Write-Host '20% protection active with an on-phone controller and native navigation spacing. USB mode changes do not own this session. Rotation blink remains unresolved.'
+    Write-Host 'Five-minute 20% protection trial active. Normal activation has no timer. Rotation blink remains unresolved.'
 } catch {
     Write-Host ('Screen Safe: '+$_.Exception.Message) -ForegroundColor Red
     exit 1

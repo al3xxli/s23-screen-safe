@@ -25,13 +25,21 @@ public class MainActivity extends Activity {
         ScrollView scroll=new ScrollView(this); scroll.setFillViewport(true);scroll.setBackgroundColor(Color.rgb(16,30,40));
         LinearLayout content=new LinearLayout(this);content.setOrientation(LinearLayout.VERTICAL);content.setPadding(dp(26),dp(66),dp(26),dp(55));
         scroll.addView(content);
+        // Edge-to-edge windows must keep interactive content outside the reported system bars.
+        scroll.setOnApplyWindowInsetsListener(new View.OnApplyWindowInsetsListener(){
+            public android.view.WindowInsets onApplyWindowInsets(View view,android.view.WindowInsets insets){
+                android.graphics.Insets nav=insets.getInsets(android.view.WindowInsets.Type.navigationBars());
+                view.setPadding(nav.left,0,nav.right,nav.bottom);
+                return insets;
+            }
+        });
         content.addView(label("Screen Safe",32));
         TextView sub=label("Keep your screen below the damaged strip.",17);sub.setPadding(0,dp(12),0,dp(30));content.addView(sub);
         status=label("Connecting…",21);status.setMinHeight(dp(120));content.addView(status);
-        enable=new Button(this);enable.setText("Protect top 30%");content.addView(enable);
+        enable=new Button(this);enable.setText("Protect top 20%");content.addView(enable);
         restore=new Button(this);restore.setText("Restore full screen");content.addView(restore);
         end=new Button(this);end.setText("End activated session");content.addView(end);
-        TextView note=label("S23 Ultra prototype · Portrait only\n\nTouches beginning in the top strip stay blocked until lifted. A gesture entering the strip is cancelled.\n\nYou can disconnect USB after activation. Reconnect after a phone restart.\n\nIf restoration fails, the top blocker stays active. Your screen density and Tap duration setting are preserved.",14);
+        TextView note=label("S23 Ultra · Adaptive layout preview\n\nProtection runs on this phone after activation, including USB mode changes. Restarting the phone or ending the app session requires computer activation. Rotation can still blink.\n\nIf touch forwarding or restoration stops working, reconnect USB and run Restore Screen on your computer.",14);
         note.setPadding(0,dp(25),0,0);content.addView(note);setContentView(scroll);
         enable.setOnClickListener(new View.OnClickListener(){public void onClick(View v){if(SessionRunner.current!=null)SessionRunner.current.request("START");}});
         restore.setOnClickListener(new View.OnClickListener(){public void onClick(View v){if(SessionRunner.current!=null)SessionRunner.current.request("STOP");}});

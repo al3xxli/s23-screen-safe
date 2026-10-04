@@ -10,19 +10,33 @@ import android.os.*;
 import android.view.*;
 import java.io.*;
 import java.util.concurrent.*;
+import ca.screensafe.core.SafeArea;
+import ca.screensafe.core.EmbeddedController;
 
-/** ADB-activated prototype session. No accessibility services are disabled. */
+/** ADB bootstraps permissions once; protection then belongs to this app process. */
 public class SessionRunner extends Instrumentation {
     public static volatile SessionRunner current;
     public volatile String status="Ready to protect your screen";
-    public volatile boolean busy;
+    public volatile boolean busy,ready;
     final BlockingQueue<String> commands=new LinkedBlockingQueue<>();
-    UiAutomation automation; WindowManager manager; View guard;
-    volatile OutputStream control;
-    ScheduledExecutorService pulses;
-    CountDownLatch backendFinished;
-    volatile boolean restored; volatile String backendError;
+    WindowManager manager; View guard;
+    EmbeddedController controller;
+    volatile String backendError;
     String testMode; boolean autoStart;
+    DisplayManager displayManager;
+    final DisplayManager.DisplayListener displayListener=new DisplayManager.DisplayListener(){
+        public void onDisplayAdded(int id){}
+        public void onDisplayRemoved(int id){}
+        public void onDisplayChanged(int id){if(id==0&&guard!=null)updateGuard();}
+    };
+    void updateGuard(){
+        SafeArea area=new SafeArea(displayManager.getDisplay(0).getRotation());
+        WindowManager.LayoutParams p=(WindowManager.LayoutParams)guard.getLayoutParams();
+        p.width=area.maskWidth();p.height=area.maskHeight();p.x=area.maskLeft();p.y=area.maskTop();
+        if(guardRotation!=area.rotation){manager.updateViewLayout(guard,p);guardRotation=area.rotation;}
+        if(TouchFilterService.current!=null)TouchFilterService.current.setRotation(area.rotation);
+    }
+    int guardRotation=-1;
     public void onCreate(Bundle args){testMode=args==null?null:args.getString("test");autoStart=args!=null&&"true".equals(args.getString("protect"));start();}
     public void request(String command){commands.offer(command);}
     void mainAction(final Runnable action) throws Exception {
@@ -37,104 +51,124 @@ public class SessionRunner extends Instrumentation {
             catch(Throwable error){result.putString("error",android.util.Log.getStackTraceString(error));finish(1,result);}
             return;
         }
+        UiAutomation bootstrap=null;
         try {
-            automation=getUiAutomation(UiAutomation.FLAG_DONT_SUPPRESS_ACCESSIBILITY_SERVICES);
-            automation.adoptShellPermissionIdentity("android.permission.INTERNAL_SYSTEM_WINDOW","android.permission.STATUS_BAR_SERVICE");
-            current=this;
+            bootstrap=getUiAutomation(UiAutomation.FLAG_DONT_SUPPRESS_ACCESSIBILITY_SERVICES);
+            bootstrap.adoptShellPermissionIdentity("android.permission.INTERNAL_SYSTEM_WINDOW",
+                    "android.permission.STATUS_BAR_SERVICE","android.permission.INJECT_EVENTS",
+                    "android.permission.MANAGE_ACTIVITY_TASKS","android.permission.DUMP",
+                    "android.permission.PACKAGE_USAGE_STATS");
+            // Leave an explicit recovery marker for the computer's restore command if
+            // this app ever dies. The app never depends on this shell process afterward.
+            ParcelFileDescriptor file=bootstrap.executeShellCommand("env CLASSPATH=/data/local/tmp/screensafe-backend.dex app_process /system/bin ScreenSafeBackend prepare");
+            boolean prepared=false;
+            try(BufferedReader reader=new BufferedReader(new InputStreamReader(new ParcelFileDescriptor.AutoCloseInputStream(file)))){
+                String line;while((line=reader.readLine())!=null){
+                    if(line.equals("PREPARED"))prepared=true;
+                    if(line.startsWith("ERROR:")||line.equals("RESTORE_ERROR"))throw new IOException(line);
+                }
+            }
+            if(!prepared)throw new IOException("Computer recovery was not prepared. Run Start Screen Safe again.");
+            // Disconnecting automation does not finish instrumentation or revoke its
+            // delegated permissions. It also avoids a dead Binder at session shutdown.
+            UiAutomation.class.getMethod("destroy").invoke(bootstrap);
+            bootstrap=null;
+            ready=true;current=this;
             getTargetContext().startActivity(new Intent(getTargetContext(),MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+            if(autoStart&&TouchFilterService.current!=null)request("START");
             if(testMode!=null){
-                new Handler(Looper.getMainLooper()).postDelayed(new Runnable(){public void run(){request("START");}},2000);
-                long stopAt="filter".equals(testMode)?92000:12000;
-                new Handler(Looper.getMainLooper()).postDelayed(new Runnable(){public void run(){request("disconnect".equals(testMode)?"DISCONNECT":"STOP");}},stopAt);
-                new Handler(Looper.getMainLooper()).postDelayed(new Runnable(){public void run(){request("EXIT");}},stopAt+8000);
+                Handler timers=new Handler(Looper.getMainLooper());
+                timers.postDelayed(new Runnable(){public void run(){request("START");}},2000);
+                long stopAt="adaptive".equals(testMode)?300000:("filter".equals(testMode)?92000:12000);
+                timers.postDelayed(new Runnable(){public void run(){request("STOP");}},stopAt);
+                timers.postDelayed(new Runnable(){public void run(){request("EXIT");}},stopAt+8000);
             }
             boolean running=true;
             while(running){
                 String command=commands.take();
                 try {
                     if(command.equals("START")&&!busy)begin();
-                    else if(command.equals("STOP")){stopBackend();if(control==null)cleanSession();}
-                    else if(command.equals("DISCONNECT")){if(control!=null)control.close();}
-                    else if(command.equals("DONE"))cleanSession();
-                    else if(command.equals("EXIT")){stopBackend();if(backendFinished!=null)backendFinished.await(10,TimeUnit.SECONDS);cleanSession();if(!busy)running=false;}
-                } catch(Exception e){status="Could not start: "+e.getMessage();stopBackend();if(backendFinished!=null)backendFinished.await(10,TimeUnit.SECONDS);cleanSession();status="Stopped: "+e.getMessage();}
+                    else if(command.equals("STOP")||command.equals("FAILED"))endProtection();
+                    else if(command.equals("EXIT")){if(endProtection())running=false;}
+                } catch(Exception error){
+                    backendError=error.getMessage();
+                    android.util.Log.e("ScreenSafe","Protection operation failed",error);
+                    endProtection();
+                }
             }
-        }catch(Throwable e){result.putString("error",android.util.Log.getStackTraceString(e));}
-        finally {
-            try{stopBackend();if(backendFinished!=null)backendFinished.await(10,TimeUnit.SECONDS);cleanSession();}catch(Exception ignored){}
-            current=null;
-            if(automation!=null)automation.dropShellPermissionIdentity();
+        }catch(Throwable error){
+            result.putString("error",android.util.Log.getStackTraceString(error));
+            backendError=error.toString();
+            android.util.Log.e("ScreenSafe","Session failed; restoring before exit",error);
+            // Unexpected command-thread failure must not abandon resized bounds.
+            // Keep the activated session available when restoration needs a retry.
+            while(busy&&!endProtection()){
+                try{commands.take();}catch(InterruptedException interrupted){Thread.interrupted();}
+            }
         }
-        result.putString("stream","Screen Safe session ended.\n");finish(0,result);
+        finally {
+            ready=false;current=null;
+            // Only bootstrap failure reaches this with a live automation connection.
+            // Normal completion is revoked by AMS when finish() ends instrumentation.
+            if(bootstrap!=null){
+                try{bootstrap.dropShellPermissionIdentity();}catch(Throwable ignored){}
+                try{UiAutomation.class.getMethod("destroy").invoke(bootstrap);}catch(Throwable ignored){}
+            }
+        }
+        result.putString("stream","Screen Safe session ended.\n");
+        // A failed initial disconnect already marks automation disconnected. Retrying
+        // finish lets AMS perform its permission cleanup if the launcher disappeared.
+        try{finish(0,result);}catch(RuntimeException disconnected){finish(0,result);}
     }
     void begin() throws Exception {
-        if(TouchFilterService.current==null)throw new IllegalStateException("Activate Screen Safe touch filter from your computer first.");
-        busy=true;restored=false;backendError=null;status="Preparing the protected area…";
+        if(!ready||TouchFilterService.current==null)throw new IllegalStateException("Activate Screen Safe touch filter from your computer first.");
+        busy=true;backendError=null;status="Preparing the protected area…";
         mainAction(new Runnable(){public void run(){addGuard();}});
-        ParcelFileDescriptor[] pipes=automation.executeShellCommandRw("env CLASSPATH=/data/local/tmp/screensafe-backend.dex app_process /system/bin ScreenSafeBackend");
-        control=new ParcelFileDescriptor.AutoCloseOutputStream(pipes[1]);
-        final InputStream output=new ParcelFileDescriptor.AutoCloseInputStream(pipes[0]);
-        backendFinished=new CountDownLatch(1);
-        new Thread(new Runnable(){public void run(){
-            try(BufferedReader reader=new BufferedReader(new InputStreamReader(output))){
-                String line;
-                while((line=reader.readLine())!=null){
-                    if(line.equals("APPLIED")){
-                        try{mainAction(new Runnable(){public void run(){TouchFilterService.current.enable(automation);}});
-                            status="Protected\nTop 30% filtered before gestures";
-                        }catch(Exception e){backendError="Touch filter could not start";stopBackend();}
-                    }
-                    else if(line.equals("RESTORED"))restored=true;
-                    else if(line.startsWith("ERROR:")||line.equals("RESTORE_ERROR"))backendError=line;
-                    android.util.Log.i("ScreenSafe",line);
-                }
-            }catch(IOException e){backendError="Controller connection closed";}
-            finally {backendFinished.countDown();commands.offer("DONE");}
-        }},"ScreenSafe display").start();
-        pulses=Executors.newSingleThreadScheduledExecutor();
-        pulses.scheduleAtFixedRate(new Runnable(){public void run(){try{send("H");}catch(IOException ignored){}}},0,2,TimeUnit.SECONDS);
+        controller=new EmbeddedController(getTargetContext(),new EmbeddedController.Listener(){
+            public void onFailure(String error,boolean restored){backendError=error;commands.offer("FAILED");}
+        });
+        controller.start();
+        mainAction(new Runnable(){public void run(){TouchFilterService.current.enable();updateGuard();}});
+        status=testMode==null?"Protected\nController running on this phone":"Experimental layout active\nFive-minute rotation trial";
+        android.util.Log.i("ScreenSafe","APPLIED in-app controller pid="+android.os.Process.myPid());
     }
-    synchronized void send(String text) throws IOException {
-        if(control!=null){control.write((text+"\n").getBytes("UTF-8"));control.flush();}
-    }
-    void stopBackend(){
-        if(!busy)return;
+    boolean endProtection() {
+        if(!busy)return true;
         status="Restoring your full screen…";
-        try{send("STOP");}catch(IOException ignored){}
-        try{if(control!=null)control.close();}catch(IOException ignored){}
-    }
-    void cleanSession() throws Exception {
-        if(pulses!=null){pulses.shutdownNow();pulses=null;}
-        try{if(control!=null)control.close();}catch(IOException ignored){}control=null;
-        if(busy && !restored && backendFinished!=null && backendFinished.getCount()==0) {
-            status="Recovering the full screen…";
-            ParcelFileDescriptor recovery=automation.executeShellCommand("env CLASSPATH=/data/local/tmp/screensafe-backend.dex app_process /system/bin ScreenSafeBackend recover");
-            try(BufferedReader reader=new BufferedReader(new InputStreamReader(new ParcelFileDescriptor.AutoCloseInputStream(recovery)))) {
-                String line; boolean failed=false;
-                while((line=reader.readLine())!=null){if(line.startsWith("ERROR:")||line.equals("RESTORE_ERROR"))failed=true;if(line.equals("RESTORED")&&!failed)restored=true;}
-            }
-        }
-        if(busy&&!restored){
-            // A failed recovery can leave the layout shifted. Keep its protection in place.
-            status="Top strip still protected\nRestore failed; tap Restore to retry or reconnect your computer.";
+        boolean restored=controller==null||controller.stop();
+        if(!restored){
+            status="Layout not restored\nReconnect your computer and run Restore Screen.";
             android.util.Log.e("ScreenSafe","Recovery unconfirmed; retaining guard and filter");
-            return;
+            return false;
         }
-        mainAction(new Runnable(){public void run(){
-            if(TouchFilterService.current!=null)TouchFilterService.current.disable();
-            if(guard!=null&&guard.isAttachedToWindow())manager.removeViewImmediate(guard);guard=null;
-        }});
-        if(busy)status=backendError!=null?"Stopped\n"+backendError:(restored?"Full screen restored\nReady when you are":"Stopped. Check the screen is restored.");
-        busy=false;backendFinished=null;
+        try {
+            final TouchFilterService filter=TouchFilterService.current;
+            mainAction(new Runnable(){public void run(){if(filter!=null)filter.disable();}});
+            if(filter!=null&&!filter.awaitDisabled()){
+                status="Waiting for touch cleanup\nTry Restore again before ending this session.";
+                return false;
+            }
+            mainAction(new Runnable(){public void run(){
+                if(displayManager!=null)displayManager.unregisterDisplayListener(displayListener);
+                if(guard!=null&&guard.isAttachedToWindow())manager.removeViewImmediate(guard);guard=null;
+            }});
+        } catch(Exception error){status="Could not finish restoration: "+error.getMessage();return false;}
+        controller=null;busy=false;
+        status=backendError!=null?"Stopped\n"+backendError:"Full screen restored\nReady when you are";
+        android.util.Log.i("ScreenSafe","RESTORED in-app controller");
+        return true;
     }
     void addGuard(){
         Context context=getTargetContext();
+        displayManager=context.getSystemService(DisplayManager.class);
         context=context.createDisplayContext(context.getSystemService(DisplayManager.class).getDisplay(0)).createWindowContext(2024,null);
         manager=context.getSystemService(WindowManager.class);
+        guardRotation=-1;
         guard=new View(context){public boolean onTouchEvent(MotionEvent event){return true;}};
         guard.setBackgroundColor(Color.BLACK);
-        WindowManager.LayoutParams p=new WindowManager.LayoutParams(1440,927,2024,WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE|WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN|WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS|WindowManager.LayoutParams.FLAG_SPLIT_TOUCH,PixelFormat.OPAQUE);
+        WindowManager.LayoutParams p=new WindowManager.LayoutParams(SafeArea.WIDTH,SafeArea.STRIP,2024,WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE|WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN|WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS|WindowManager.LayoutParams.FLAG_SPLIT_TOUCH,PixelFormat.OPAQUE);
         p.gravity=Gravity.TOP|Gravity.LEFT;p.setTitle("Screen Safe touch guard");p.packageName=getTargetContext().getPackageName();
         p.layoutInDisplayCutoutMode=WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS;p.setFitInsetsTypes(0);manager.addView(guard,p);
+        displayManager.registerDisplayListener(displayListener,new Handler(Looper.getMainLooper()));updateGuard();
     }
 }
