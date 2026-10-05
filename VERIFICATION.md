@@ -1,4 +1,16 @@
-# Screen Safe 0.11 preview verification — October 4, 2026
+# Screen Safe 0.12 preview verification — October 5, 2026
+
+## Recents navigation overlap — October 5, 2026
+
+- Traced the overlap to Samsung's Recents child layout using the physical-origin bounds `(0,618)-(1440,3088)` as local card coordinates. Samsung's own layout log already reports a 168-pixel native bottom inset. This disproves the initial missing-native-inset hypothesis.
+- Baseline Close All occupied local y=2285..2439, physical y=2903..3057; navigation starts at physical y=2920. The final correction adds a Binder-owned navigation source only to the exact Samsung Recents root task on display 0. Its physical frame is y=2752..3088: the native bar plus one additional native bar height, capped by the vertical viewport offset.
+- Corrected Close All occupies local y=2136..2290, physical y=2754..2908, with no intersection with the native navigation region. Three repeated home/Recents entries retained this placement. No Close All action or app dismissal was performed.
+- Both landscape directions use native navigation only. A first candidate reapplied the source too early on returning to portrait: Samsung's subsequent configuration handler replaced the cached style with native metrics. Applying the source after a 750 ms settling interval corrected both landscape-to-portrait returns in the next trial. This is a settled-layout check, not proof of seamless rotation animation; a brief adjustment can be visible during settling.
+- In-app Restore removed the custom source (confirmed after reopening Recents, since stopped activity dumps can contain stale inset state). Protect reacquired it and restored the corrected button position. An ordinary app window retained only the native navigation source. Shared app/display bounds were not shortened.
+- Host tests cover exact package/activity/display/bounds targeting, no-op updates, stable Binder ownership, task replacement/disappearance, hidden bars, all rotation policies, deferred application, partial apply/restore failure retention, retry backoff, and controller cleanup failure retaining recovery state. Recents update failures are cosmetic and retry without disabling the core layout or touch guard.
+- All five host suites passed; affected Recents/controller suites were rerun after the timing and failure-handling revisions. Android 36 build and APK signing verification passed. Touch-filter production code and the backend DEX are unchanged; on-device generated touch checks were not repeated for this layout-only change.
+- Existing touch freezes and Camera rotation blink remain unresolved and were outside this request. The shown Samsung three-button navigation / Recents style was tested; other Recents styles and navigation modes remain unverified. USB lifetime architecture remains the previously verified app-owned controller, with no new shell dependency.
+- Private screenshots, launcher inspection files, logs and signing files remain outside Git. The original investigation is recorded in `RECENTS-INVESTIGATION.md`.
 
 ## App-owned controller and USB tethering — October 4, 2026
 

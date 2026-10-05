@@ -1,6 +1,6 @@
-# Screen Safe 0.11 preview — S23 Ultra
+# Screen Safe 0.12 preview — S23 Ultra
 
-This preview blocks the damaged top **20%** and places apps in the remaining physical screen area. Version 0.11 runs the layout controller and touch forwarding inside the activated app process, removing their ongoing dependency on the USB debugging launcher. Version 0.10 corrects a touch-cancellation defect reproduced in Android's actual input dispatcher and suppresses redundant forwarded moves caused solely by blocked ghost contacts. It retains the notification-panel and navigation-spacing corrections. **The original Maps freeze was not captured, so these findings do not establish that every reported freeze is fixed or that ghost coordinates were being remapped. Rotation blink remains unresolved.**
+This preview blocks the damaged top **20%** and places apps in the remaining physical screen area. Version 0.12 keeps Samsung Recents' Close All button above the navigation buttons with a Recents-only spacing correction. Version 0.11 runs the layout controller and touch forwarding inside the activated app process, removing their ongoing dependency on the USB debugging launcher. Version 0.10 corrects a touch-cancellation defect reproduced in Android's actual input dispatcher and suppresses redundant forwarded moves caused solely by blocked ghost contacts. It retains the notification-panel and navigation-spacing corrections. **The original Maps freeze was not captured, so these findings do not establish that every reported freeze is fixed or that ghost coordinates were being remapped. Rotation blink remains unresolved.**
 
 Tested device: Samsung SM-S918W, Android 16 / One UI 8.5, physical resolution 1440 × 3088. No root is required. The natural top 618 pixels (20%, rounded up) are masked; the interface uses the remaining area. The damaged edge follows rotation. The 0.8 Camera rotation-stall correction and the previously confirmed wallpaper correction are retained.
 
@@ -26,6 +26,10 @@ At activation, the shell writes a recovery marker before any resize. The app's o
 
 ## Changes and verification
 
+- Version 0.12 adds one extra native navigation-height gutter only to Samsung's portrait Recents task, capped by the protected viewport's vertical offset. Samsung's child layout counts that physical origin again; its native bar inset was already correct. Ordinary apps, notification shade geometry, wallpaper geometry and touch coordinates retain their existing behavior.
+- The Recents source follows task replacement, is removed in landscape/reverse portrait or when the native bar is hidden, and is removed by Restore/End. It is applied after a 750 ms configuration settling interval because Samsung otherwise overwrites its cached layout during rotation. Cosmetic-update failures retry without switching off screen protection.
+- Five host suites pass. Phone captures verify Close All above navigation, repeated entry, both landscape directions and return to portrait, and in-app Restore/Protect cleanup. This is a spacing workaround for the tested Samsung layout; seamless transitions, other Recents styles/navigation modes, and intermittent freeze resolution are not established by these checks.
+
 - Cancel only the accepted pointer IDs that are still down. Previously, cancellation after a finger lifted could include that departed pointer. A controlled test on this phone showed Android rejecting that CANCEL and the next DOWN, leaving navigation stuck until a valid cancellation arrived.
 - Suppress redundant MOVE events when only rejected ghost contacts change and all accepted fingers remain unchanged. A host reproduction generated 1,002 redundant moves after one legitimate DOWN; the updated filter suppresses all 1,002. Real motion, pressure, other axes, metadata changes, and batched history are retained.
 - Report raw events, mixed-contact samples, suppressed stationary moves, active/rejected pointers, maximum physical pointer count, and recovery causes. These distinguish ghost traffic and exhausted or interrupted pointer streams from app-delivered input.
@@ -48,13 +52,14 @@ The app has no network permission and does not save or transmit touch events. Th
 
 ## Development
 
-Build `source/build.ps1` with JDK 17, Android platform 36, Build Tools 36, and R8. Run all four host suites:
+Build `source/build.ps1` with JDK 17, Android platform 36, Build Tools 36, and R8. Run all five host suites:
 
 ```text
 python tests/host_checks.py --jdk <JDK-folder>
 python tests/backend_checks.py --jdk <JDK-folder>
 python tests/shade_checks.py --jdk <JDK-folder>
 python tests/embedded_checks.py --jdk <JDK-folder>
+python tests/recents_checks.py --jdk <JDK-folder>
 ```
 
 The gesture suite covers protected/mixed contacts, ghost-only changes while a good finger remains down, pressure and other axes, batched history, cancellation after POINTER_UP, lifecycle recovery, injection flags, and stale-input cancellation. Controller checks cover a non-drawing status area, rapid reversals, shade-only geometry/insets, visibility updates, failed-apply retry, and restoration. Shade checks cover translated/clipped navigation frames in all four rotations and stable source ownership. Host checks do not establish Samsung rendering or physical touch responsiveness.

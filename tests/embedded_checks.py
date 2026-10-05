@@ -35,6 +35,7 @@ shade='package ca.screensafe.core;\n'+shade
 shade=shade.replace('static boolean incoherent;', 'EmbeddedShadeInsets(EmbeddedController ignored){} static boolean incoherent;')
 stubs['ca/screensafe/core/EmbeddedShadeInsets.java']=shade
 stubs.update({
+ 'ca/screensafe/core/EmbeddedRecentsInsets.java':'''package ca.screensafe.core; final class EmbeddedRecentsInsets { static int clears,updates,changes;static boolean failClear;EmbeddedRecentsInsets(EmbeddedController c){} void refresh(SafeArea a,android.graphics.Rect r){updates++;} void clear(){clears++;if(failClear)throw new IllegalStateException("Recents restore failed");} void layoutChanged(){changes++;} }''',
  'android/content/Context.java':'package android.content; public class Context {}',
  'android/graphics/Point.java':'package android.graphics; public class Point {public int x,y;}',
  'android/util/Log.java':'''package android.util; public class Log {
@@ -96,7 +97,12 @@ public class EmbeddedLifecycleChecks {
     public static void main(String[] args)throws Exception {
         EmbeddedShadeInsets.override=null;EmbeddedShadeInsets.incoherent=false;
         Controller c=new Controller(null);c.start();check(c.isActive(),"start did not apply");
-        Organizer first=Organizer.latest;check(!first.wrongThread,"Mutation outside main serialization");
+        Organizer first=Organizer.latest;
+        check(EmbeddedRecentsInsets.changes>0&&EmbeddedRecentsInsets.updates>0,"Recents rotation/update hooks missing");
+        EmbeddedRecentsInsets.failClear=true;
+        check(!c.stop()&&c.isActive()&&first.unregisters==0,"Recents cleanup failure discarded organizer");
+        EmbeddedRecentsInsets.failClear=false;
+        check(!first.wrongThread,"Mutation outside main serialization");
         check(c.stop()&&!c.isActive()&&first.unregisters==1,"stop did not restore/unregister");
         c.start();check(c.isActive()&&Organizer.latest!=first,"start/stop/start reused dead organizer");
         Organizer second=Organizer.latest;second.fail=true;

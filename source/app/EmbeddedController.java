@@ -24,6 +24,7 @@ public class EmbeddedController {
     final Listener listener;
     final EmbeddedDisplayBridge bridge;
     final EmbeddedShadeInsets shadeInsets;
+    final EmbeddedRecentsInsets recentsInsets;
     Class<?> organizerType,wctType,surfaceType,surfaceTxType,rectType,tokenType;
     Object organizer,displayManager,wallpaperToken,wallpaperSurface,shadeToken;
     final List<Object> surfaces=new ArrayList<>(),tokens=new ArrayList<>();
@@ -45,7 +46,7 @@ public class EmbeddedController {
     public EmbeddedController(Context context,Listener listener){
         if(context==null)throw new NullPointerException("context");
         this.listener=listener;handler=new Handler(Looper.getMainLooper());
-        bridge=new EmbeddedDisplayBridge(handler);shadeInsets=new EmbeddedShadeInsets(this);
+        bridge=new EmbeddedDisplayBridge(handler);shadeInsets=new EmbeddedShadeInsets(this);recentsInsets=new EmbeddedRecentsInsets(this);
     }
 
     /** Call on SessionRunner's command thread. Returns only after layout is applied. */
@@ -179,6 +180,7 @@ public class EmbeddedController {
         if(restored)return true;
         try{bridge.unwatch();}catch(Exception error){Log.w("ScreenSafe","Rotation watcher cleanup failed",error);}
         try{
+            recentsInsets.clear();
             if(mutationAttempted){
                 Object tx=wctType.getConstructor().newInstance();
                 if(shadeToken!=null)shadeInsets.remove(tx,shadeToken);
@@ -285,7 +287,9 @@ public class EmbeddedController {
                 ||info.getClass().getField("logicalHeight").getInt(info)!=snapshot.displayHeight)return;
         android.graphics.Rect shadeInsets=this.shadeInsets.read(snapshot);
         if(shadeInsets==null)return;
-        if(rotation==appliedRotation&&density==appliedDensity&&shadeInsets.equals(appliedShadeInsets))return;
+        if(rotation==appliedRotation&&density==appliedDensity&&shadeInsets.equals(appliedShadeInsets)){
+            recentsInsets.refresh(snapshot,shadeInsets);return;
+        }
         final SafeArea area=new SafeArea(rotation);
         // Android and SurfaceFlinger must agree on the viewport origin. Local (0,0)
         // configuration plus an independent surface offset loses native bar insets
@@ -320,6 +324,8 @@ public class EmbeddedController {
         mutationAttempted=true;
         call(organizer,"applyTransaction",new Class<?>[]{wctType},tx);
         appliedRotation=rotation;appliedDensity=density;appliedShadeInsets=shadeInsets;
+        recentsInsets.layoutChanged();
+        recentsInsets.refresh(snapshot,shadeInsets);
         maintainPosition();
 
     }
