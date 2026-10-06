@@ -47,6 +47,45 @@ public final class TouchFilterService extends AccessibilityService {
     public volatile long rawEvents,mixedSamples,suppressedStationary,cancelledStreams;
     public volatile long unsafeCrossings,missingPointers,reusedPointers,hardwareCancels;
     public volatile int activePointers,rejectedPointers,maxPhysicalPointers,maxQueued;
+    // Resolve the vendor axis by name: axis 55 is not a palm axis on every OS.
+    static final int PALM_AXIS=resolvePalmAxis();
+    private static final java.lang.reflect.Field PACKED_BITS=packedField("mPackedAxisBits");
+    private static final java.lang.reflect.Field PACKED_VALUES=packedField("mPackedAxisValues");
+    public volatile long normalizedPalmSamples;
+    private static java.lang.reflect.Field packedField(String name){
+        if(PALM_AXIS<0)return null;
+        try{java.lang.reflect.Field field=MotionEvent.PointerCoords.class.getDeclaredField(name);field.setAccessible(true);return field;}
+        catch(ReflectiveOperationException|RuntimeException absent){return null;}
+    }
+    private static boolean palmTag(float value){return value==1||value==2||value==3;}
+
+    private static int resolvePalmAxis(){
+        try{int axis=MotionEvent.class.getField("AXIS_PALM").getInt(null);return axis>=0&&axis<64?axis:-1;}
+        catch(ReflectiveOperationException|SecurityException absent){return -1;}
+    }
+    private static boolean normalizePalm(MotionEvent.PointerCoords coords,int toolType){
+        if(PALM_AXIS<0||toolType!=MotionEvent.TOOL_TYPE_FINGER)return false;
+        boolean changed=false;
+        if(palmTag(coords.getAxisValue(PALM_AXIS))){coords.setAxisValue(PALM_AXIS,0);changed=true;}
+        // This Samsung build exposes a Java palm field, but JNI still stores axis
+        // 55 in the packed array. setAxisValue alone changes the unused field.
+        // Touch only that packed value; preserve all other axes and resampling data.
+        try{
+            if(PACKED_BITS==null||PACKED_VALUES==null)throw new IllegalStateException("Samsung palm metadata unavailable");
+            long bits=PACKED_BITS.getLong(coords),bit=Long.MIN_VALUE>>>PALM_AXIS;
+            if((bits&bit)!=0){
+                int index=Long.bitCount(bits&~(-1L>>>PALM_AXIS));
+                float[] values=(float[])PACKED_VALUES.get(coords);
+                if(palmTag(values[index])){values[index]=0;changed=true;}
+            }
+        }catch(IllegalAccessException error){throw new IllegalStateException("Cannot normalize Samsung palm metadata",error);}
+        return changed;
+    }
+
+    private void acceptedCoords(MotionEvent e,int index,int history,MotionEvent.PointerCoords out,int toolType){
+        if(history<0)e.getPointerCoords(index,out);else e.getHistoricalPointerCoords(index,history,out);
+        if(normalizePalm(out,toolType))normalizedPalmSamples++;
+    }
     private boolean receiving;
     private final BroadcastReceiver screenState=new BroadcastReceiver(){
         public void onReceive(Context context,Intent intent){
@@ -87,6 +126,8 @@ public final class TouchFilterService extends AccessibilityService {
     // permission. Keep direct system-service handles, not the bootstrap owner's binder.
     public void enable(){
         if(filtering)return;
+        if(PALM_AXIS>=0&&(PACKED_BITS==null||PACKED_VALUES==null))
+            throw new IllegalStateException("Samsung palm metadata unavailable; restart with the computer launcher");
         final Object input,wm;
         final Method injection,transactionSync;
         try{
@@ -99,7 +140,7 @@ public final class TouchFilterService extends AccessibilityService {
         }catch(ReflectiveOperationException error){throw new IllegalStateException("Restart Screen Safe using its updated computer launcher",error);}
         generation++;
         worker.post(new Runnable(){public void run(){reset();injector=input;windowManager=wm;injectAsync=injection;syncInputTransactions=transactionSync;}});
-        blocked=forwarded=failures=recoveries=0;
+        blocked=forwarded=failures=recoveries=normalizedPalmSamples=0;
         staleEvents=maxQueueDelayMs=maxInjectionMs=0;
         rawEvents=mixedSamples=suppressedStationary=cancelledStreams=0;
         unsafeCrossings=missingPointers=reusedPointers=hardwareCancels=0;
@@ -232,25 +273,25 @@ public final class TouchFilterService extends AccessibilityService {
             MotionEvent.PointerCoords[] coords=new MotionEvent.PointerCoords[indices.size()];
             for(int j=0;j<indices.size();j++){
                 props[j]=new MotionEvent.PointerProperties();e.getPointerProperties(indices.get(j),props[j]);
-                coords[j]=new MotionEvent.PointerCoords();e.getPointerCoords(indices.get(j),coords[j]);
+                coords[j]=new MotionEvent.PointerCoords();acceptedCoords(e,indices.get(j),-1,coords[j],props[j].toolType);
             }
             // A damaged contact can report thousands of samples while an accepted
             // finger is stationary. Do not turn that noise into an app MOVE flood.
-            // Only mixed streams qualify; keep real movement, every axis and history.
+            // Only mixed streams qualify; keep real movement, other axes and history.
             boolean stationary=newAction==MotionEvent.ACTION_MOVE&&mixed&&unchanged(e,indices);
             if(stationary)suppressedStationary++;
             else{
                 int history=newAction==MotionEvent.ACTION_MOVE?e.getHistorySize():0;
-                if(history>0)for(int j=0;j<indices.size();j++)e.getHistoricalPointerCoords(indices.get(j),0,coords[j]);
+                if(history>0)for(int j=0;j<indices.size();j++)acceptedCoords(e,indices.get(j),0,coords[j],props[j].toolType);
                 MotionEvent out=MotionEvent.obtain(downTime,history>0?e.getHistoricalEventTime(0):e.getEventTime(),newAction,indices.size(),props,coords,
                         e.getMetaState(),e.getButtonState(),e.getXPrecision(),e.getYPrecision(),0,e.getEdgeFlags(),InputDevice.SOURCE_TOUCHSCREEN,e.getFlags());
                 try{
                     for(int h=1;h<history;h++){
-                        for(int j=0;j<indices.size();j++)e.getHistoricalPointerCoords(indices.get(j),h,coords[j]);
+                        for(int j=0;j<indices.size();j++)acceptedCoords(e,indices.get(j),h,coords[j],props[j].toolType);
                         out.addBatch(e.getHistoricalEventTime(h),coords,e.getMetaState());
                     }
                     if(history>0){
-                        for(int j=0;j<indices.size();j++)e.getPointerCoords(indices.get(j),coords[j]);
+                        for(int j=0;j<indices.size();j++)acceptedCoords(e,indices.get(j),-1,coords[j],props[j].toolType);
                         out.addBatch(e.getEventTime(),coords,e.getMetaState());
                     }
                     inject(out);if(last!=null)last.recycle();last=MotionEvent.obtain(out);
@@ -277,16 +318,28 @@ public final class TouchFilterService extends AccessibilityService {
             last.getPointerProperties(previous,beforeProp);e.getPointerProperties(index,nowProp);
             if(beforeProp.toolType!=nowProp.toolType)return false;
             last.getPointerCoords(previous,before);e.getPointerCoords(index,now);
+            normalizePalm(now,nowProp.toolType);
             if(!sameAxes(before,now))return false;
             for(int h=0;h<e.getHistorySize();h++){
                 e.getHistoricalPointerCoords(index,h,now);
+                normalizePalm(now,nowProp.toolType);
                 if(!sameAxes(before,now))return false;
             }
         }
         return true;
     }
+    private static float deliveredAxis(MotionEvent.PointerCoords coords,int axis){
+        if(axis==PALM_AXIS&&PACKED_BITS!=null&&PACKED_VALUES!=null){
+            try{
+                long bits=PACKED_BITS.getLong(coords);
+                if((bits&(Long.MIN_VALUE>>>axis))!=0)
+                    return ((float[])PACKED_VALUES.get(coords))[Long.bitCount(bits&~(-1L>>>axis))];
+            }catch(IllegalAccessException error){throw new IllegalStateException("Cannot read Samsung palm metadata",error);}
+        }
+        return coords.getAxisValue(axis);
+    }
     private static boolean sameAxes(MotionEvent.PointerCoords a,MotionEvent.PointerCoords b){
-        for(int axis=0;axis<64;axis++)if(a.getAxisValue(axis)!=b.getAxisValue(axis))return false;
+        for(int axis=0;axis<64;axis++)if(deliveredAxis(a,axis)!=deliveredAxis(b,axis))return false;
         return true;
     }
     private void inject(MotionEvent e){
@@ -332,7 +385,7 @@ public final class TouchFilterService extends AccessibilityService {
     public void onInterrupt(){if(filtering)restartStream();}
     protected void dump(java.io.FileDescriptor fd,java.io.PrintWriter out,String[] args){
         out.println("ScreenSafe touch filter: active="+filtering+" blockedSamples="+blocked+" forwardedEvents="+forwarded+" failures="+failures+" recoveries="+recoveries+" generation="+generation
-                +" queued="+queued.get()+" staleEvents="+staleEvents+" maxQueueDelayMs="+maxQueueDelayMs+" maxInjectionMs="+maxInjectionMs
+                +" palmAxis="+PALM_AXIS+" normalizedPalmSamples="+normalizedPalmSamples+" queued="+queued.get()+" staleEvents="+staleEvents+" maxQueueDelayMs="+maxQueueDelayMs+" maxInjectionMs="+maxInjectionMs
                 +" rawEvents="+rawEvents+" mixedSamples="+mixedSamples+" suppressedStationary="+suppressedStationary
                 +" activePointers="+activePointers+" rejectedPointers="+rejectedPointers+" maxPhysicalPointers="+maxPhysicalPointers+" maxQueued="+maxQueued
                 +" cancelledStreams="+cancelledStreams+" unsafeCrossings="+unsafeCrossings+" missingPointers="+missingPointers+" reusedPointers="+reusedPointers+" hardwareCancels="+hardwareCancels);

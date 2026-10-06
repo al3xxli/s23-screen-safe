@@ -65,3 +65,16 @@ The mask remains the natural top 618 pixels. Other app areas keep physical bound
 **Harsh rotation blink remains unresolved.** Long-term touch reliability/power use, all third-party app layouts, and reverse-portrait device navigation remain unverified. The filter cannot distinguish ghost contacts that hardware reports outside the protected strip.
 
 Private phone captures, logs, notification contents, native-probe output, and signing material remain outside Git. The diagnostic tests did not perform notification actions, call controls, Camera shutter actions, or Camera recording.
+
+
+## Version 0.13: captured ordinary-use freeze (2026-10-06)
+
+The initial idle raw capture was inconclusive because the user was away. In the next coordinated test, the user confirmed non-responsive physical swipes. Raw touchscreen events included 2,040 usable-area Y updates (maximum raw Y 3,626), the filter forwarded them, and InputDispatcher delivered DOWN/UP to the foreground app. Samsung ViewRootImpl repeatedly logged `action cancel - 1`; the controller had no queue backlog or injection failures. Inspection of this phone's framework established that its palm rejection replaces those finger events with CANCEL.
+
+The Samsung Java PointerCoords palm field is inconsistent with JNI's packed axis 55. A no-injection on-device reproduction created native palm values 1, 2 and 3 while the Java coordinate getter returned 0. Changing only the Java field did not remove them. The final filter clears those values in the copied native packed array and Java field, only after safe-area admission and only for finger tool types. It preserves other axes, resampling data, pointer IDs, history, genuine cancellation, non-palm sentinels and non-finger classifications. The axis is resolved by name; stock platforms without AXIS_PALM skip normalization. Failure to access required Samsung metadata prevents filter startup rather than silently claiming correction.
+
+The regression fails against the old/Java-only implementation and passes with the native correction. All five host suites passed. The actual Android MotionEvent regression passed in a separate shell process without replacing the running controller or injecting input into other apps. Compilation, signing and APK verification passed; backend DEX and geometry code are unchanged.
+
+During the live email-app retest, telemetry recorded 240 normalized pointer samples, 272 forwarded events, 17,816 blocked samples, zero failures, no stale events, no recoveries and an empty queue. Maximum injection time was 31 ms. The captured post-fix window contained no `action cancel - 1` messages. The user confirmed that the email app remained responsive for the requested test. This is direct evidence for the captured failure and fix; it does not establish that every possible future freeze is eliminated.
+
+The final build also checks stationary comparisons against native palm metadata so non-palm sentinel changes are not swallowed as ghost-only motion. Public getter and native packed representations are covered separately. Private full framework files and phone logs remain outside Git.

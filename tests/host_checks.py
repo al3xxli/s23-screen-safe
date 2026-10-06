@@ -40,14 +40,15 @@ public class WindowManagerGlobal {
 'android/view/InputEvent.java': '''package android.view; public class InputEvent {}''',
 'android/view/MotionEvent.java': '''package android.view;
 public class MotionEvent extends InputEvent {
- public static final int ACTION_DOWN=0,ACTION_UP=1,ACTION_MOVE=2,ACTION_CANCEL=3,ACTION_POINTER_DOWN=5,ACTION_POINTER_UP=6,TOOL_TYPE_FINGER=1,FLAG_CANCELED=32;
+ public static final int ACTION_DOWN=0,ACTION_UP=1,ACTION_MOVE=2,ACTION_CANCEL=3,ACTION_POINTER_DOWN=5,ACTION_POINTER_UP=6,TOOL_TYPE_FINGER=1,FLAG_CANCELED=32,AXIS_PALM=55;
  public static class PointerProperties {public int id,toolType;}
  public static class PointerCoords {
   public float x,y,pressure,size,touchMajor,touchMinor,toolMajor,toolMinor,orientation;
   private float[] extra=new float[64];
+  private long mPackedAxisBits; private float[] mPackedAxisValues;
   public float getAxisValue(int axis){switch(axis){case 0:return x;case 1:return y;case 2:return pressure;case 3:return size;case 4:return touchMajor;case 5:return touchMinor;case 6:return toolMajor;case 7:return toolMinor;case 8:return orientation;default:return extra[axis];}}
   public void setAxisValue(int axis,float v){switch(axis){case 0:x=v;break;case 1:y=v;break;case 2:pressure=v;break;case 3:size=v;break;case 4:touchMajor=v;break;case 5:touchMinor=v;break;case 6:toolMajor=v;break;case 7:toolMinor=v;break;case 8:orientation=v;break;default:extra[axis]=v;}}
-  public void copyFrom(PointerCoords c){for(int axis=0;axis<64;axis++)setAxisValue(axis,c.getAxisValue(axis));}
+  public void copyFrom(PointerCoords c){for(int axis=0;axis<64;axis++)setAxisValue(axis,c.getAxisValue(axis));mPackedAxisBits=c.mPackedAxisBits;mPackedAxisValues=c.mPackedAxisValues==null?null:c.mPackedAxisValues.clone();}
  }
  private java.util.ArrayList<PointerCoords[]> history=new java.util.ArrayList<>();
  private java.util.ArrayList<Long> historyTimes=new java.util.ArrayList<>();
@@ -63,6 +64,9 @@ public class MotionEvent extends InputEvent {
  public int getActionMasked(){return action&255;}public int getActionIndex(){return action>>8;}public void setAction(int a){action=a;if((a&255)==ACTION_CANCEL)flags|=FLAG_CANCELED;}
  public int getPointerCount(){return props.length;}public int getPointerId(int i){return props[i].id;}public float getY(int i){return coords[i].y;}
  public float getX(int i){return coords[i].x;}public float getHistoricalX(int i,int h){return history.get(h)[i].x;}
+ public float getAxisValue(int axis,int i){return nativeAxis(coords[i],axis);}
+ public float getHistoricalAxisValue(int axis,int i,int h){return nativeAxis(history.get(h)[i],axis);}
+ private static float nativeAxis(PointerCoords c,int axis){long bit=Long.MIN_VALUE>>>axis;return (c.mPackedAxisBits&bit)==0?c.getAxisValue(axis):c.mPackedAxisValues[Long.bitCount(c.mPackedAxisBits&~(-1L>>>axis))];}
  public int getHistorySize(){return history.size();}public float getHistoricalY(int i,int h){return history.get(h)[i].y;}
  public void addBatch(long t,PointerCoords[] c,int meta){history.add(coords);historyTimes.add(time);coords=copyCoords(c);time=t;this.meta=meta;}
  public long getEventTime(){return time;}public long getDownTime(){return down;}public long getHistoricalEventTime(int h){return historyTimes.get(h);}

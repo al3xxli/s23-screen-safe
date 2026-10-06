@@ -46,6 +46,18 @@ final class TouchFilterChecks {
         MotionEvent.PointerCoords c=new MotionEvent.PointerCoords();c.x=x;c.y=y;c.pressure=1;c.size=1;return c;
     }
     static void pass(TouchFilterService f,MotionEvent e){try{f.filter(e);}finally{e.recycle();}}
+    static void palm(MotionEvent.PointerCoords c,float value){
+        // Reproduce this phone's native packed axis, which its Java getter hides.
+        try{
+            java.lang.reflect.Field bits=MotionEvent.PointerCoords.class.getDeclaredField("mPackedAxisBits");bits.setAccessible(true);
+            java.lang.reflect.Field values=MotionEvent.PointerCoords.class.getDeclaredField("mPackedAxisValues");values.setAccessible(true);
+            long old=bits.getLong(c),bit=Long.MIN_VALUE>>>55;
+            int index=Long.bitCount(old&~(-1L>>>55)),count=Long.bitCount(old);
+            float[] data=(float[])values.get(c),next=new float[count+((old&bit)==0?1:0)];
+            if(data!=null){System.arraycopy(data,0,next,0,index);System.arraycopy(data,index+((old&bit)==0?0:1),next,index+1,count-index-((old&bit)==0?0:1));}
+            next[index]=value;values.set(c,next);bits.setLong(c,old|bit);
+        }catch(ReflectiveOperationException error){throw new AssertionError(error);}
+    }
     static String ghostChecks(){
         TouchFilterService f=fresh();event(f,0,new int[]{7},1500);
         event(f,5|(1<<8),new int[]{7,0},1500,100);
@@ -82,6 +94,37 @@ final class TouchFilterChecks {
         pass(f,sample(6|(1<<8),MotionEvent.FLAG_CANCELED,new int[]{0,7},new MotionEvent.PointerCoords[]{ghost,real}));actions(0,3);
         require(f.activePointers==0,"Canceled finger stayed active");
         event(f,2,new int[]{0},100);event(f,5|(1<<8),new int[]{0,7},100,1700);actions(0,3,0);
+        // Samsung tags otherwise-valid fingers as palms during the captured freeze.
+        // Classification must not survive rebuilding the accepted stream or its history.
+        f=fresh();ghost=coord(500,100);real=coord(700,1500);
+        palm(ghost,1);palm(real,1);real.setAxisValue(32,12);real.pressure=.7f;
+        pass(f,sample(0,0,new int[]{0},new MotionEvent.PointerCoords[]{ghost}));actions();
+        pass(f,sample(5|(1<<8),0,new int[]{0,7},new MotionEvent.PointerCoords[]{ghost,real}));actions(0);
+        sent.get(0).getPointerCoords(0,delivered);
+        require(sent.get(0).getAxisValue(55,0)==0,"Samsung palm marker cancels accepted DOWN");
+        require(delivered.x==700&&delivered.y==1500&&delivered.pressure==.7f&&delivered.getAxisValue(32)==12,"Palm correction changed real touch data");
+        palm(real,2);pass(f,sample(2,0,new int[]{0,7},new MotionEvent.PointerCoords[]{ghost,real}));actions(0);
+        real.y=1600;palm(real,2);history=sample(2,0,new int[]{0,7},new MotionEvent.PointerCoords[]{ghost,real});
+        real.y=1700;palm(real,3);history.addBatch(time+=10,new MotionEvent.PointerCoords[]{ghost,real},0);
+        pass(f,history);actions(0,2);
+        sent.get(1).getHistoricalPointerCoords(0,0,delivered);require(sent.get(1).getHistoricalAxisValue(55,0,0)==0&&delivered.y==1600,"Historical palm classification leaked");
+        sent.get(1).getPointerCoords(0,delivered);require(sent.get(1).getAxisValue(55,0)==0&&delivered.y==1700,"Current palm classification leaked");
+        // A real hardware cancellation still cancels, and a rejected contact cannot
+        // become accepted by moving out of the strip with the palm marker set.
+        pass(f,sample(6|(1<<8),MotionEvent.FLAG_CANCELED,new int[]{0,7},new MotionEvent.PointerCoords[]{ghost,real}));actions(0,2,3);
+        ghost.y=1800;pass(f,sample(2,0,new int[]{0},new MotionEvent.PointerCoords[]{ghost}));actions(0,2,3);
+        f=fresh();ghost=coord(500,100);real=coord(700,1500);palm(real,1);
+        pass(f,sample(0,0,new int[]{7},new MotionEvent.PointerCoords[]{real}));
+        pass(f,sample(5|(1<<8),0,new int[]{7,0},new MotionEvent.PointerCoords[]{real,ghost}));actions(0);
+        palm(real,-2);pass(f,sample(2,0,new int[]{7,0},new MotionEvent.PointerCoords[]{real,ghost}));actions(0,2);
+        require(sent.get(1).getAxisValue(55,0)==-2,"Changed non-palm classification was suppressed");
+        f=fresh();real=coord(700,1500);palm(real,-2);
+        pass(f,sample(0,0,new int[]{7},new MotionEvent.PointerCoords[]{real}));sent.get(0).getPointerCoords(0,delivered);
+        require(sent.get(0).getAxisValue(55,0)==-2,"Unrelated Samsung classification changed");
+        f=fresh();palm(real,1);
+        MotionEvent.PointerProperties[] sp={new MotionEvent.PointerProperties()};sp[0].id=7;sp[0].toolType=2;
+        MotionEvent stylus=MotionEvent.obtain(1000,time+=10,0,1,sp,new MotionEvent.PointerCoords[]{real},0,0,1,1,6,0,InputDevice.SOURCE_TOUCHSCREEN,0);
+        pass(f,stylus);sent.get(0).getPointerCoords(0,delivered);require(sent.get(0).getAxisValue(55,0)==1,"Non-finger classification changed");
         fresh();return "PASS: ghost flood suppression, real axes/history, active-only cancellation, and hardware-canceled pointer handling.";
     }
     static String run(){
@@ -151,6 +194,6 @@ final class TouchFilterChecks {
         f=fresh();currentPoint(f,0,SystemClock.uptimeMillis(),700,1500);
         currentPoint(f,2,SystemClock.uptimeMillis(),700,1800);currentPoint(f,1,SystemClock.uptimeMillis(),700,1800);actions(0,2,1);
         require(f.staleEvents==0,"Gesture downTime incorrectly treated as event age");
-        ghostChecks();fresh();return "PASS: filtering, pointer recovery, lifecycle cancellation, all four rotations, stale-input rejection, fresh touch recovery, ghost-flood suppression, active-only cancellation, and canceled-palm handling.";
+        ghostChecks();fresh();return "PASS: filtering, pointer recovery, lifecycle cancellation, all four rotations, stale-input rejection, fresh touch recovery, ghost-flood suppression, active-only cancellation, canceled-palm handling, and native Samsung palm normalization.";
     }
 }
