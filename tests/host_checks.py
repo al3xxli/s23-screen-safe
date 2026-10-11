@@ -52,15 +52,16 @@ public class MotionEvent extends InputEvent {
  }
  private java.util.ArrayList<PointerCoords[]> history=new java.util.ArrayList<>();
  private java.util.ArrayList<Long> historyTimes=new java.util.ArrayList<>();
- private long down,time;private int action,flags,meta,buttons,edge;private float xp,yp;
+ private long down,time;private int action,flags,meta,buttons,edge,deviceId;private float xp,yp;
  private PointerProperties[] props;private PointerCoords[] coords;
  private static PointerCoords[] copyCoords(PointerCoords[] c){PointerCoords[] out=new PointerCoords[c.length];for(int i=0;i<c.length;i++){out[i]=new PointerCoords();out[i].copyFrom(c[i]);}return out;}
  public static MotionEvent obtain(long d,long t,int a,int n,PointerProperties[] p,PointerCoords[] c,int meta,int buttons,float xp,float yp,int device,int edge,int source,int flags){
-  MotionEvent e=new MotionEvent();e.down=d;e.time=t;e.action=a;e.flags=flags|((a&255)==ACTION_CANCEL?FLAG_CANCELED:0);e.meta=meta;e.buttons=buttons;e.xp=xp;e.yp=yp;e.edge=edge;
+  MotionEvent e=new MotionEvent();e.down=d;e.time=t;e.action=a;e.deviceId=device;e.flags=flags|((a&255)==ACTION_CANCEL?FLAG_CANCELED:0);e.meta=meta;e.buttons=buttons;e.xp=xp;e.yp=yp;e.edge=edge;
   e.props=new PointerProperties[n];for(int i=0;i<n;i++){e.props[i]=new PointerProperties();e.props[i].id=p[i].id;e.props[i].toolType=p[i].toolType;}
   e.coords=copyCoords(c);return e;
  }
  public static MotionEvent obtain(MotionEvent e){MotionEvent out=obtain(e.down,e.time,e.action,e.props.length,e.props,e.coords,e.meta,e.buttons,e.xp,e.yp,0,e.edge,4098,e.flags);for(int h=0;h<e.history.size();h++){out.history.add(copyCoords(e.history.get(h)));out.historyTimes.add(e.historyTimes.get(h));}return out;}
+ public int getDeviceId(){return deviceId;}
  public int getActionMasked(){return action&255;}public int getActionIndex(){return action>>8;}public void setAction(int a){action=a;if((a&255)==ACTION_CANCEL)flags|=FLAG_CANCELED;}
  public int getPointerCount(){return props.length;}public int getPointerId(int i){return props[i].id;}public float getY(int i){return coords[i].y;}
  public float getX(int i){return coords[i].x;}public float getHistoricalX(int i,int h){return history.get(h)[i].x;}

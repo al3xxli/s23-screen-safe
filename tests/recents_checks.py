@@ -26,11 +26,12 @@ import android.graphics.Rect;import android.content.ComponentName;import android
 public class RecentsChecks {
  static void check(boolean b,String m){if(!b)throw new AssertionError(m);}
  public static class Token {}
- public static class Info {public int displayId=0;public ComponentName topActivity=new ComponentName("com.sec.android.app.launcher","com.android.quickstep.RecentsActivity");public Rect bounds=new Rect(0,618,1440,3088);public Token token=new Token();}
+ public static class Config {public int seq;}
+ public static class Info {public Config configuration=new Config();public boolean isVisible=true;public long lastActiveTime;public int displayId=0;public ComponentName topActivity=new ComponentName("com.sec.android.app.launcher","com.android.quickstep.RecentsActivity");public Rect bounds=new Rect(0,618,1440,3088);public Token token=new Token();}
  public static class Service {public Info task=new Info();int queries;public Info getRootTaskInfoOnDisplay(int mode,int type,int display){check(mode==0&&type==3&&display==0,"Wrong task scope");queries++;return task;}}
- public static class Wct {List<Token> removed=new ArrayList<>();Token added;IBinder owner;Rect frame;
- public void addInsetsSource(Token t,IBinder o,int i,int type,Rect r,Rect[] bounds,int flags){check(i==0&&type==2&&bounds==null&&flags==0,"Wrong source policy");added=t;owner=o;frame=r;}
- public void removeInsetsSource(Token t,IBinder o,int i,int type){check(i==0&&type==2,"Wrong removal");removed.add(t);owner=o;}}
+ public static class Wct {List<Token> removed=new ArrayList<>();Token added;IBinder owner;Rect frame;int sourceIndex;List<Integer> removedIndices=new ArrayList<>();
+ public void addInsetsSource(Token t,IBinder o,int i,int type,Rect r,Rect[] bounds,int flags){check((i==0||i==1)&&type==2&&bounds==null&&flags==0,"Wrong source policy");added=t;owner=o;frame=r;sourceIndex=i;}
+ public void removeInsetsSource(Token t,IBinder o,int i,int type){check((i==0||i==1)&&type==2,"Wrong removal");removed.add(t);removedIndices.add(i);owner=o;}}
  public static class Organizer {List<Wct> transactions=new ArrayList<>();boolean fail;public void applyTransaction(Wct tx){transactions.add(tx);if(fail)throw new IllegalStateException("Binder failed after possible server apply");}}
  public static void main(String[] args)throws Exception {
  EmbeddedController c=new EmbeddedController();EmbeddedRecentsInsets insets=new EmbeddedRecentsInsets(c);
@@ -65,6 +66,20 @@ public class RecentsChecks {
  org.fail=true;insets.refresh(portrait,nav);check(!insets.owned.isEmpty(),"Cosmetic failure lost cleanup ownership");
  int pendingCount=org.transactions.size();insets.refresh(portrait,nav);check(org.transactions.size()==pendingCount,"Failure retry spun on every tick");
  org.fail=false;android.os.SystemClock.now+=1000;insets.refresh(portrait,nav);check(insets.appliedToken==service.task.token,"Cosmetic failure did not recover");insets.clear();
+ // A retained server inset is not proof Samsung still uses it in child layout.
+ service.task=new Info();android.os.SystemClock.now=10000;insets.update(portrait,nav);
+ Wct baseline=org.transactions.get(org.transactions.size()-1);int before=org.transactions.size();
+ android.os.SystemClock.now+=1999;insets.update(portrait,nav);check(org.transactions.size()==before,"Visible refresh not throttled");
+ android.os.SystemClock.now++;insets.update(portrait,nav);
+ Wct repair=org.transactions.get(org.transactions.size()-1);
+ check(org.transactions.size()==before+1&&repair.sourceIndex!=baseline.sourceIndex&&repair.frame.equals(baseline.frame),"Visible stale-cache repair failed or changed geometry");
+ check(repair.owner==baseline.owner&&repair.removedIndices.contains(0)&&repair.removedIndices.contains(1),"Source refresh leaked identity");
+ service.task.isVisible=false;before=org.transactions.size();android.os.SystemClock.now+=10000;insets.update(portrait,nav);
+ check(org.transactions.size()==before,"Hidden Recents periodically mutated");
+ service.task.configuration.seq++;insets.update(portrait,nav);check(org.transactions.size()==before+1,"Same-token configuration change ignored");
+ before=org.transactions.size();service.task.lastActiveTime++;service.task.isVisible=true;insets.update(portrait,nav);
+ check(org.transactions.size()==before+1,"Same-token Recents resume ignored");
+ insets.clear();
  System.out.println("PASS: Recents targeting, physical geometry, rotation/hidden-bar removal, task replacement, stable ownership, idempotency, apply/restore failure retention and restart.");
  }
 }'''}

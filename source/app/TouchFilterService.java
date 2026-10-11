@@ -35,6 +35,31 @@ public final class TouchFilterService extends AccessibilityService {
     private final HashSet<Integer> allowed=new HashSet<>();
     private final HashSet<Integer> rejected=new HashSet<>();
     private long downTime;
+    private final java.util.HashMap<Integer,float[]> acceptedStarts=new java.util.HashMap<>();
+    private final java.util.ArrayDeque<String> extraContactRecords=new java.util.ArrayDeque<>();
+    static final int MAX_EXTRA_RECORDS=24;
+    public volatile int maxAcceptedPointers;
+    public volatile long extraPointerAdmissions;
+    private void recordExtraContact(MotionEvent e,ArrayList<Integer> indices){
+        StringBuilder text=new StringBuilder("extra-contact t=").append(e.getEventTime())
+                .append(" rotation=").append(area.rotation).append(" device=").append(e.getDeviceId())
+                .append(" accepted=").append(indices.size()).append(" physical=").append(e.getPointerCount())
+                .append(" newId=").append(e.getPointerId(e.getActionIndex()));
+        for(int i:indices){
+            int id=e.getPointerId(i);float[] start=acceptedStarts.get(id);
+            text.append(" [id=").append(id).append(" start=");
+            if(start==null)text.append("unknown");else text.append(Math.round(start[0])).append(',').append(Math.round(start[1]));
+            text.append(" now=").append(Math.round(e.getX(i))).append(',').append(Math.round(e.getY(i)))
+                    .append(" palm=").append(PALM_AXIS<0?0:e.getAxisValue(PALM_AXIS,i))
+                    .append(" major=").append(e.getAxisValue(4,i)).append(" minor=").append(e.getAxisValue(5,i)).append(']');
+        }
+        synchronized(extraContactRecords){
+            if(extraContactRecords.size()==MAX_EXTRA_RECORDS)extraContactRecords.removeFirst();
+            extraContactRecords.addLast(text.toString());
+        }
+        extraPointerAdmissions++;
+    }
+
     private MotionEvent last;
     volatile SafeArea area=new SafeArea(0);
     private int requestedRotation;
@@ -144,7 +169,9 @@ public final class TouchFilterService extends AccessibilityService {
         staleEvents=maxQueueDelayMs=maxInjectionMs=0;
         rawEvents=mixedSamples=suppressedStationary=cancelledStreams=0;
         unsafeCrossings=missingPointers=reusedPointers=hardwareCancels=0;
-        activePointers=rejectedPointers=maxPhysicalPointers=maxQueued=0;
+        activePointers=rejectedPointers=maxPhysicalPointers=maxQueued=maxAcceptedPointers=0;
+        extraPointerAdmissions=0;
+        synchronized(extraContactRecords){extraContactRecords.clear();}
         filtering=true;configure(true);
     }
     public void disable(){
@@ -247,17 +274,22 @@ public final class TouchFilterService extends AccessibilityService {
         // If an accepted contact enters the strip, cancel its current gesture, never click it.
         boolean crossing=false;
         for(int i=0;i<e.getPointerCount();i++)if(allowed.contains(e.getPointerId(i))&&unsafe(e,i))crossing=true;
-        if(crossing){unsafeCrossings++;try{cancel();}finally{rejected.addAll(allowed);allowed.clear();if(last!=null){last.recycle();last=null;}}}
+        if(crossing){unsafeCrossings++;try{cancel();}finally{rejected.addAll(allowed);allowed.clear();acceptedStarts.clear();if(last!=null){last.recycle();last=null;}}}
         if(action==MotionEvent.ACTION_DOWN||action==MotionEvent.ACTION_POINTER_DOWN){
             int id=e.getPointerId(index);
             if(unsafe(e,index)){rejected.add(id);blocked++;}
-            else if(!rejected.contains(id)){if(allowed.isEmpty())downTime=e.getEventTime();allowed.add(id);}
+            else if(!rejected.contains(id)){if(allowed.isEmpty())downTime=e.getEventTime();allowed.add(id);acceptedStarts.put(id,new float[]{e.getX(index),e.getY(index)});}
         }
         ArrayList<Integer> indices=new ArrayList<>();
         for(int i=0;i<e.getPointerCount();i++){
             if(allowed.contains(e.getPointerId(i)))indices.add(i);
             else blocked++;
         }
+        maxAcceptedPointers=Math.max(maxAcceptedPointers,indices.size());
+        // A third accepted contact is a diagnostic candidate, not proof of a ghost.
+        // Record admission only, not MOVE traffic or app contents. Never cap fingers.
+        if(indices.size()>=3&&(action==MotionEvent.ACTION_DOWN||action==MotionEvent.ACTION_POINTER_DOWN)
+                &&allowed.contains(e.getPointerId(index)))recordExtraContact(e,indices);
         if(!indices.isEmpty()){
             boolean mixed=indices.size()<e.getPointerCount();
             if(mixed)mixedSamples++;
@@ -299,7 +331,7 @@ public final class TouchFilterService extends AccessibilityService {
             }
         }
         if(action==MotionEvent.ACTION_UP||action==MotionEvent.ACTION_POINTER_UP){
-            int id=e.getPointerId(index);allowed.remove(id);rejected.remove(id);
+            int id=e.getPointerId(index);allowed.remove(id);rejected.remove(id);acceptedStarts.remove(id);
             if(allowed.isEmpty()&&last!=null){last.recycle();last=null;}
         }
         if(action==MotionEvent.ACTION_UP)reset();
@@ -380,14 +412,15 @@ public final class TouchFilterService extends AccessibilityService {
             try{inject(cancel);cancelledStreams++;}finally{cancel.recycle();}
         }
     }
-    private void reset(){allowed.clear();rejected.clear();activePointers=rejectedPointers=0;if(last!=null){last.recycle();last=null;}downTime=0;}
+    private void reset(){allowed.clear();rejected.clear();acceptedStarts.clear();activePointers=rejectedPointers=0;if(last!=null){last.recycle();last=null;}downTime=0;}
     public void onAccessibilityEvent(AccessibilityEvent event){}
     public void onInterrupt(){if(filtering)restartStream();}
     protected void dump(java.io.FileDescriptor fd,java.io.PrintWriter out,String[] args){
+        synchronized(extraContactRecords){for(String record:extraContactRecords)out.println(record);}
         out.println("ScreenSafe touch filter: active="+filtering+" blockedSamples="+blocked+" forwardedEvents="+forwarded+" failures="+failures+" recoveries="+recoveries+" generation="+generation
                 +" palmAxis="+PALM_AXIS+" normalizedPalmSamples="+normalizedPalmSamples+" queued="+queued.get()+" staleEvents="+staleEvents+" maxQueueDelayMs="+maxQueueDelayMs+" maxInjectionMs="+maxInjectionMs
                 +" rawEvents="+rawEvents+" mixedSamples="+mixedSamples+" suppressedStationary="+suppressedStationary
-                +" activePointers="+activePointers+" rejectedPointers="+rejectedPointers+" maxPhysicalPointers="+maxPhysicalPointers+" maxQueued="+maxQueued
+                +" maxAcceptedPointers="+maxAcceptedPointers+" extraPointerAdmissions="+extraPointerAdmissions+" activePointers="+activePointers+" rejectedPointers="+rejectedPointers+" maxPhysicalPointers="+maxPhysicalPointers+" maxQueued="+maxQueued
                 +" cancelledStreams="+cancelledStreams+" unsafeCrossings="+unsafeCrossings+" missingPointers="+missingPointers+" reusedPointers="+reusedPointers+" hardwareCancels="+hardwareCancels);
     }
     public void onDestroy(){if(receiving){unregisterReceiver(screenState);receiving=false;}disable();current=null;if(thread!=null)thread.quitSafely();super.onDestroy();}

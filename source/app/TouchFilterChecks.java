@@ -194,6 +194,20 @@ final class TouchFilterChecks {
         f=fresh();currentPoint(f,0,SystemClock.uptimeMillis(),700,1500);
         currentPoint(f,2,SystemClock.uptimeMillis(),700,1800);currentPoint(f,1,SystemClock.uptimeMillis(),700,1800);actions(0,2,1);
         require(f.staleEvents==0,"Gesture downTime incorrectly treated as event age");
+        // Extra-contact evidence must survive subsequent ordinary/ghost traffic,
+        // remain bounded and never change accepted gesture behavior.
+        f=fresh();event(f,0,new int[]{0},100);event(f,5|(1<<8),new int[]{0,1},100,1600);
+        event(f,5|(2<<8),new int[]{0,1,2},100,1600,1900);require(f.extraPointerAdmissions==0&&f.maxAcceptedPointers==2,"Rejected third pointer logged as accepted");
+        event(f,5|(3<<8),new int[]{0,1,2,3},100,1600,1900,2200);actions(0,5,5);
+        require(f.extraPointerAdmissions==1&&f.maxAcceptedPointers==3,"Third accepted pointer not recorded");
+        event(f,1,new int[]{3},2200);
+        for(int trial=0;trial<30;trial++){
+            event(f,0,new int[]{1},1500);event(f,5|(1<<8),new int[]{1,2},1500,1800);
+            event(f,5|(2<<8),new int[]{1,2,3},1500,1800,2100);f.clearStream();
+        }
+        java.io.StringWriter dump=new java.io.StringWriter();f.dump(null,new java.io.PrintWriter(dump),new String[0]);
+        String report=dump.toString();int records=report.split("extra-contact t=",-1).length-1;
+        require(records==TouchFilterService.MAX_EXTRA_RECORDS&&report.contains("accepted=3")&&report.contains("start=700,2100"),"Extra-contact evidence missing or unbounded");
         ghostChecks();fresh();return "PASS: filtering, pointer recovery, lifecycle cancellation, all four rotations, stale-input rejection, fresh touch recovery, ghost-flood suppression, active-only cancellation, canceled-palm handling, and native Samsung palm normalization.";
     }
 }
